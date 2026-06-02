@@ -3,13 +3,9 @@ import json
 import websockets
 
 JOGADORES = {}
-# As 5 salas oficiais do projeto Sala33
 SALAS = {
-    "the_hub": set(), 
-    "museu": set(), 
-    "floresta": set(), 
-    "o_quarto": set(), 
-    "sala_jogos": set()
+    "the_hub": set(), "museu": set(), "floresta": set(), 
+    "o_quarto": set(), "sala_jogos": set()
 }
 
 async def enviar_para_sala(sala_nome, payload):
@@ -53,12 +49,15 @@ async def handler(websocket):
             elif dados["tipo"] == "mudar_sala":
                 await mover_jogador(websocket, dados["nova_sala"])
                 
-            # NOVA LÓGICA DE CHAT
             elif dados["tipo"] == "chat":
                 await enviar_para_sala(sala_atual, {
-                    "tipo": "chat",
-                    "username": JOGADORES[websocket]["username"],
-                    "texto": dados["texto"]
+                    "tipo": "chat", "username": JOGADORES[websocket]["username"], "texto": dados["texto"]
+                })
+                
+            # NOTIFICAÇÃO EM TEMPO REAL: Indicador de digitação
+            elif dados["tipo"] == "digitando":
+                await enviar_para_sala(sala_atual, {
+                    "tipo": "jogador_digitando", "id": id(websocket), "estado": dados["estado"]
                 })
 
     except websockets.exceptions.ConnectionClosed:
