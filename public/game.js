@@ -60,7 +60,7 @@ function conectar() {
     document.getElementById('menu').style.display = 'none';
     document.getElementById('gameUI').style.display = 'flex';
 
-    ws = new WebSocket('ws://localhost:8080');
+    ws = new WebSocket('ws://' + window.location.hostname + ':8080');
 
     ws.onopen = () => {
         ws.send(JSON.stringify({ tipo: 'login', username: meuBicho.username }));
