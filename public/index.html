@@ -11,12 +11,12 @@
             height: 100vh; margin: 0; overflow: hidden;
         }
         
-        /* Menu de Entrada Estilo Arcade/Terminal */
+        /* Menu de Entrada Estilo Caixa de Diálogo */
         #menu { 
             background: #161616; padding: 30px; 
-            border: 4px double #ffffff; 
+            border: 4px solid #ffffff; 
             box-shadow: 8px 8px 0px #333333;
-            text-align: center; width: 320px;
+            text-align: center; width: 360px;
         }
         #menu h2 { color: #ffffff; margin-top: 0; font-size: 24px; letter-spacing: 4px; }
         #menu p { font-size: 11px; color: #777777; margin-bottom: 20px; }
@@ -27,14 +27,48 @@
             text-align: center; font-size: 14px; outline: none; margin-bottom: 15px;
         }
         input[type="text"]:focus { border-color: #ffffff; }
+
+        /* Container do Seletor Listado + Preview Window */
+        .selector-container {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            background: #222222;
+            border: 2px solid #555555;
+            padding: 10px;
+            margin-bottom: 20px;
+            text-align: left;
+        }
+        .selector-fields { width: 70%; }
+        .selector-fields label { font-size: 10px; color: #888888; display: block; margin-bottom: 5px; }
+        
+        select {
+            width: 100%; padding: 6px; background: #161616; color: #ffffff;
+            border: 1px solid #555555; font-family: 'Courier New', monospace;
+            font-size: 12px; outline: none; cursor: pointer;
+        }
+        select:focus { border-color: #ffffff; }
+
+        /* Janela de Visualização da Skin */
+        .preview-window {
+            width: 64px; height: 64px; background: #111111;
+            border: 2px dashed #555555; display: flex; align-items: center;
+            justify-content: center; position: relative;
+        }
+        #spritePreview {
+            width: 32px; height: 32px;
+            image-rendering: pixelated;
+            display: none; /* Só aparece via JS quando a imagem carregar */
+        }
+        .preview-fallback {
+            font-size: 9px; color: #444444; text-align: center; font-weight: bold;
+        }
         
         button { 
             width: 100%; padding: 12px; background: #ffffff; color: #0d0d0d; 
             border: none; font-family: 'Courier New', monospace; font-weight: bold; 
             font-size: 14px; cursor: pointer; box-shadow: 4px 4px 0px #555555;
-            transition: transform 0.1s, box-shadow 0.1s;
         }
-        button:active { transform: translate(2px, 2px); box-shadow: 2px 2px 0px #555555; }
         button:hover { background: #cccccc; }
 
         /* Interface do Jogo */
@@ -47,10 +81,12 @@
             padding: 10px; overflow-y: auto; text-align: left; margin-bottom: 5px; 
             font-size: 13px; line-height: 1.6; color: #bbbbbb;
         }
-        #chatInput { 
-            width: 100%; padding: 10px; background: #161616; color: #ffffff; 
-            border: 2px solid #444444; font-family: 'Courier New', monospace; outline: none;
-        }
+        
+        #emoteBar { display: flex; gap: 6px; margin-bottom: 6px; width: 100%; }
+        .emote-btn { width: auto; padding: 4px 8px; background: #161616; color: #ffffff; border: 2px solid #444444; font-size: 11px; box-shadow: none; cursor: pointer; }
+        .emote-btn:hover { background: #ffffff; color: #0d0d0d; border-color: #ffffff; }
+
+        #chatInput { width: 100%; padding: 10px; background: #161616; color: #ffffff; border: 2px solid #444444; font-family: 'Courier New', monospace; outline: none; }
         #chatInput:focus { border-color: #ffffff; }
         .sistema { color: #666666; font-style: italic; }
     </style>
@@ -60,7 +96,26 @@
     <div id="menu">
         <h2>SALA 33</h2>
         <p>CONEXÃO LOCAL // PROTOCOLO WS</p>
+        
         <input type="text" id="username" placeholder="NOME DO BICHO" maxlength="12">
+        
+        <div class="selector-container">
+            <div class="selector-fields">
+                <label>PERSONAGEM (32x32):</label>
+                <select id="spriteSelect" onchange="atualizarPreviewSkin()">
+                    <option value="cinzaguy">CINZA GUY</option>
+                    <option value="bailarina">BAILARINA</option>
+                    <option value="cat">GATO</option>
+                    <option value="dog">CACHORRO</option>
+                    <option value="nututu">NUTUTU</option>
+                </select>
+            </div>
+            <div class="preview-window" id="previewWinBox">
+                <img id="spritePreview" src="" alt="Preview">
+                <div id="fallbackText" class="preview-fallback">32x32</div>
+            </div>
+        </div>
+
         <button onclick="conectar()">ENTRAR</button>
     </div>
 
@@ -68,6 +123,16 @@
         <canvas id="gameCanvas" width="400" height="300"></canvas>
         <div id="chatContainer">
             <div id="chatBox"></div>
+            
+            <div id="emoteBar">
+                <button class="emote-btn" onclick="enviarEmoteDirect('(•‿•)')"> feliz </button>
+                <button class="emote-btn" onclick="enviarEmoteDirect('(╥﹏╥)')"> chorar </button>
+                <button class="emote-btn" onclick="enviarEmoteDirect('(❤️)')"> love </button>
+                <button class="emote-btn" onclick="enviarEmoteDirect('(o_O)')"> hã? </button>
+                <button class="emote-btn" onclick="enviarEmoteDirect('(≧◡≦)')"> rir </button>
+                <button class="emote-btn" onclick="enviarEmoteDirect('(━╤┳━)')"> bravo </button>
+            </div>
+
             <input type="text" id="chatInput" placeholder="Pressione ENTER para falar...">
         </div>
     </div>
