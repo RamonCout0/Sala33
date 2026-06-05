@@ -50,7 +50,11 @@ async def mover_jogador(websocket, nova_sala):
                 "x": JOGADORES[outro_ws]["x"],
                 "y": JOGADORES[outro_ws]["y"],
                 "spriteId": JOGADORES[outro_ws]["spriteId"],
+<<<<<<< Updated upstream
                 "lado": JOGADORES[outro_ws].get("lado", "direita")
+=======
+                "lado": JOGADORES[outro_ws].get("lado", "direita") # Registra o lado dos veteranos
+>>>>>>> Stashed changes
             })
     
     # Envia a lista completa de uma só vez para o utilizador
@@ -63,6 +67,7 @@ async def mover_jogador(websocket, nova_sala):
         except Exception:
             pass
     
+<<<<<<< Updated upstream
     # 3. Introduz oficialmente o jogador na nova sala e avisa toda a gente de lá
     if websocket in JOGADORES:
         JOGADORES[websocket]["sala"] = nova_sala
@@ -100,6 +105,21 @@ async def handler(websocket):
     # Dispara o trabalhador de background para este cliente
     tarefa_escrita = asyncio.create_task(escritor_cliente(websocket, queue))
     
+=======
+    JOGADORES[websocket]["sala"] = nova_sala
+    SALAS[nova_sala].add(websocket)
+    
+    await enviar_para_sala(nova_sala, {
+        "tipo": "novo_jogador", "id": id(websocket),
+        "username": JOGADORES[websocket]["username"],
+        "x": JOGADORES[websocket]["x"], "y": JOGADORES[websocket]["y"],
+        "spriteId": JOGADORES[websocket]["spriteId"],
+        "lado": JOGADORES[websocket].get("lado", "direita") # Alerta o lado do novato
+    })
+
+async def handler(websocket):
+    JOGADORES[websocket] = {"username": "Anônimo", "sala": None, "x": 200, "y": 150, "spriteId": "cinzaguy", "lado": "direita"}
+>>>>>>> Stashed changes
     try:
         async_iterable = websocket.__aimg__ if hasattr(websocket, '__aimg__') else websocket
         async for message in async_iterable:
@@ -134,12 +154,20 @@ async def handler(websocket):
             elif dados["tipo"] == "mover":
                 JOGADORES[websocket]["x"] = dados["x"]
                 JOGADORES[websocket]["y"] = dados["y"]
+<<<<<<< Updated upstream
                 JOGADORES[websocket]["lado"] = dados.get("lado", "direita")
                 
                 await enviar_para_sala(sala_atual, {
                     "tipo": "movimento", "id": id(websocket),
                     "x": dados["x"], "y": dados["y"],
                     "lado": JOGADORES[websocket]["lado"] 
+=======
+                JOGADORES[websocket]["lado"] = dados.get("lado", "direita") # Salva direção na RAM
+                await enviar_para_sala(sala_atual, {
+                    "tipo": "movimento", "id": id(websocket),
+                    "x": dados["x"], "y": dados["y"],
+                    "lado": JOGADORES[websocket]["lado"] # Replica para a sala
+>>>>>>> Stashed changes
                 })
                 
             elif dados["tipo"] == "mudar_sala":
@@ -197,6 +225,12 @@ def abrir_porta_firewall(porta):
     except Exception:
         print(f"⚠️ [Aviso] Sem permissão para auto-configurar o Firewall na porta {porta}.")
 
+<<<<<<< Updated upstream
+=======
+# ==========================================
+# SERVIDOR WEB DE ARQUIVOS BACKGROUND
+# ==========================================
+>>>>>>> Stashed changes
 def rodar_servidor_web_background():
     dir_alvo = "public" if os.path.exists("public") else "."
     class HandlerCustomizado(SimpleHTTPRequestHandler):
@@ -209,6 +243,12 @@ def rodar_servidor_web_background():
     except Exception as e:
         print(f"❌ Erro no Servidor Web: {e}")
 
+<<<<<<< Updated upstream
+=======
+# ==========================================
+# RUN
+# ==========================================
+>>>>>>> Stashed changes
 async def main():
     print("=" * 65)
     print("        SALA 33 - HUB DE EXECUÇÃO UNIFICADO (LAN ACTIVE)        ")

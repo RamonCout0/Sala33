@@ -84,9 +84,9 @@ const MAPAS = {
             { destino: "o_quarto", x: 180, y: 292, w: 70, h: 8, spawnX: 184, spawnY: 40 }  
         ]
     },
-    "sala_jogos": { nome: "SALA DE JOGOS", corFundo: "#444444", imagemPath: "assets/mapa_sala_jogos.png", portas: [{ destino: "the_hub", x: 380, y: 130, w: 20, h: 40, spawnX: 45, spawnY: 225 }] },
+    "sala_jogos": { nome: "SALA DE JOGOS", corFundo: "#444444", imagemPath: "assets/sala_jogos.png", portas: [{ destino: "the_hub", x: 380, y: 130, w: 20, h: 40, spawnX: 45, spawnY: 225 }] },
     "museu": { nome: "MUSEU", corFundo: "#111111", imagemPath: "assets/mapa_museu.png", portas: [{ destino: "the_hub", x: 0, y: 130, w: 20, h: 40, spawnX: 315, spawnY: 160 }] },
-    "floresta": { nome: "FLORESTA", corFundo: "#1a1a1a", imagemPath: "assets/mapa_floresta.png", portas: [{ destino: "the_hub", x: 180, y: 280, w: 40, h: 20, spawnX: 110, spawnY: 145 }] },
+    "floresta": { nome: "FLORESTA", corFundo: "#1a1a1a", imagemPath: "assets/floresta.png", portas: [{ destino: "the_hub", x: 180, y: 280, w: 40, h: 20, spawnX: 110, spawnY: 145 }] },
     "o_quarto": { nome: "O QUARTO", corFundo: "#050505", imagemPath: "assets/mapa_o_quarto.png", portas: [{ destino: "the_hub", x: 180, y: 0, w: 40, h: 20, spawnX: 214, spawnY: 250 }] }
 };
 
