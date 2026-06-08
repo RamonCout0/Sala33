@@ -1,0 +1,13 @@
+{
+  "id": "the_hub",
+  "nome": "THE HUB",
+  "corFundo": "#2a2a2a",
+  "imagem": "assets/maps/the_hub.png",
+  "musica": "assets/music/musica_hub.mp3",
+  "portas": [
+    { "destino": "sala_jogos", "x": 0,   "y": 215, "w": 26, "h": 36,  "spawnX": 330, "spawnY": 134 },
+    { "destino": "museu",      "x": 365, "y": 100, "w": 35, "h": 130, "spawnX": 30,  "spawnY": 134 },
+    { "destino": "floresta",   "x": 35,  "y": 60,  "w": 60, "h": 90,  "spawnX": 184, "spawnY": 230 },
+    { "destino": "o_quarto",   "x": 180, "y": 292, "w": 70, "h": 8,   "spawnX": 184, "spawnY": 40  }
+  ]
+}

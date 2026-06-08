@@ -1,0 +1,10 @@
+{
+  "id": "floresta",
+  "nome": "FLORESTA",
+  "corFundo": "#1a1a1a",
+  "imagem": "assets/maps/floresta.png",
+  "musica": "assets/music/musica_floresta.mp3",
+  "portas": [
+    { "destino": "the_hub", "x": 180, "y": 280, "w": 40, "h": 20, "spawnX": 110, "spawnY": 145 }
+  ]
+}

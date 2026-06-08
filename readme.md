@@ -1,305 +1,213 @@
-# 🕹️ SALA 33 — Estudo de Sistemas Distribuídos com WebSockets
+# 🕹️ SALA 33
 
-## 📖 Sobre o Projeto
+Ambiente multiplayer em tempo real desenvolvido como projeto da disciplina de **Sistemas Distribuídos**. Inspirado em RPGs retrô e mundos virtuais como o Club Penguin, o projeto simula um pequeno mundo com salas interconectadas, chat, personagens e minigames — tudo sincronizado via WebSockets.
 
-O **SALA 33** é um ambiente multiplayer em tempo real desenvolvido como projeto da disciplina de **Sistemas Distribuídos**.
+O projeto é **open-source** e foi construído para ser fácil de expandir: qualquer pessoa pode criar novas salas, personagens, músicas e mecânicas sem tocar no engine principal.
 
-O objetivo principal do projeto é aplicar conceitos de comunicação distribuída através de um ambiente virtual interativo inspirado em RPGs retrô, permitindo que múltiplos clientes compartilhem estados, eventos e interações em tempo real utilizando WebSockets.
-
-Ao invés de utilizar apenas exemplos tradicionais de chat, o projeto simula um pequeno mundo virtual composto por salas interconectadas, possibilitando a experimentação prática de sincronização de estados, concorrência, comunicação assíncrona e gerenciamento de múltiplos usuários.
+> 📖 Quer contribuir? Leia o **[MODDING.md](./MODDING.md)**.
 
 ---
 
-# 🎓 Conceitos de Sistemas Distribuídos Aplicados
+## 🌐 Funcionalidades
 
-## Comunicação Cliente-Servidor
+### Mundo e Navegação
+- 5 salas interconectadas com transição suave entre elas
+- Cada sala tem fundo, trilha sonora e conexões próprias
+- Spawn definido por sala de destino
 
-* Comunicação persistente utilizando WebSockets.
-* Troca bidirecional de mensagens em tempo real.
-* Protocolo baseado em mensagens JSON.
-* Atualizações contínuas entre clientes e servidor.
+### Multiplayer em Tempo Real
+- Movimento sincronizado de todos os jogadores na sala
+- Entrada e saída de jogadores notificada para todos
+- Somente jogadores da mesma sala trocam eventos entre si
 
-## Estado Compartilhado
+### Personagens
+- 7 skins disponíveis (sprites 32×32 pixel art)
+- Animação de bobeio ao se mover
+- Espelhamento automático de sprite baseado na direção
 
-O servidor mantém o estado global da aplicação:
+### Chat
+- Mensagens em tempo real com balões de fala sobre os personagens
+- Indicador de digitação (`...`) visível para os outros
+- Emotes via botões ou atalhos de teclado (`:)`, `:(`, `<3`, etc.)
 
-* Jogadores conectados.
-* Salas ativas.
-* Estado dos minigames.
-* Mensagens de chat.
-* Eventos compartilhados.
+### Áudio
+- Trilha sonora por sala com lazy loading (só baixa quando entra na sala)
+- Controle de volume via `F1`
 
-Os clientes recebem apenas as atualizações necessárias para manter a consistência local.
-
-## Concorrência
-
-O sistema atende múltiplos usuários simultaneamente através de:
-
-* `asyncio`
-* Tarefas assíncronas
-* Filas de mensagens por conexão
-
-## Distribuição de Eventos
-
-Eventos produzidos por um cliente são propagados aos demais participantes da mesma sala:
-
-* Movimentação dos jogadores
-* Mensagens de chat
-* Entrada e saída de usuários
-* Atualizações dos minigames
-
-## Consistência de Estado
-
-O servidor atua como autoridade central para:
-
-* Posições dos jogadores
-* Estados dos minigames
-* Pontuações
-* Eventos globais
-
-Evitando divergências entre clientes.
-
-## Escalabilidade
-
-O projeto separa responsabilidades entre:
-
-* Servidor HTTP para arquivos estáticos
-* Servidor WebSocket para comunicação em tempo real
-
-Permitindo melhor organização e distribuição de carga.
+### Minigames
+- 🏓 **Pong Multiplayer** — física da bola rodando no servidor a 60fps
+- 🔥 **Duelo de Aura** — quem aperta espaço mais rápido; partículas e screen shake escalados por nível
 
 ---
 
-# 🎯 Objetivos de Aprendizagem
+## 🗺️ Salas Disponíveis
 
-Durante o desenvolvimento foram explorados conceitos como:
-
-### WebSockets
-
-* Conexões persistentes entre cliente e servidor.
-* Troca de mensagens JSON.
-* Broadcast para múltiplos usuários.
-* Gerenciamento de conexões simultâneas.
-
-### Multiplayer
-
-* Sincronização de movimento dos jogadores.
-* Compartilhamento de estados.
-* Atualizações em tempo real.
-* Eventos sincronizados.
-
-### Arquitetura Cliente-Servidor
-
-* Cliente responsável pela renderização.
-* Servidor responsável pela lógica global.
-* Controle de salas independentes.
-* Comunicação assíncrona.
-
-### Programação Assíncrona
-
-Utilização de:
-
-* asyncio
-* websockets
-
-Para processar múltiplos eventos simultaneamente sem bloquear a aplicação.
+| Sala | Descrição |
+|---|---|
+| 🏠 The Hub | Área central, conecta todas as outras |
+| 🎮 Sala de Jogos | Mesa de Pong multiplayer |
+| 🖼️ Museu | Galeria de arte interativa |
+| 🌲 Floresta | Sala ambiente |
+| 🛏️ O Quarto | Duelo de Aura via TV |
 
 ---
 
-# 🌐 Funcionalidades Implementadas
+## 🚀 Como Executar
 
-## Hub Multiplayer
-
-Ambiente virtual onde vários jogadores podem:
-
-* Entrar simultaneamente.
-* Conversar em tempo real.
-* Explorar diferentes mapas.
-* Participar de atividades compartilhadas.
-
-## Sistema de Salas
-
-O mundo é dividido em ambientes independentes:
-
-* 🏠 The Hub
-* 🎮 Sala de Jogos
-* 🖼️ Museu
-* 🌲 Floresta
-* 🛏️ O Quarto
-
-Cada sala possui seus próprios jogadores e eventos.
-
-## Sistema de Chat
-
-* Chat em tempo real.
-* Balões de fala sobre os personagens.
-* Indicador de digitação.
-* Sistema de emotes rápidos.
-* Conversão automática de atalhos para expressões visuais.
-
-## Sistema de Personagens
-
-Cada jogador pode escolher uma skin ao entrar.
-
-Personagens disponíveis:
-
-* Cinza Guy
-* Bailarina
-* Gato
-* Cachorro
-* Nututu
-* Portalel
-* Iluminus
-
-As informações são sincronizadas para todos os jogadores da mesma sala.
-
-## Sistema de Áudio Dinâmico
-
-Cada ambiente possui sua própria trilha sonora.
-
-As músicas são carregadas apenas quando necessárias utilizando Lazy Loading, reduzindo:
-
-* Consumo de memória
-* Uso de banda
-* Tempo de carregamento inicial
-
----
-
-# 🎮 Minigames
-
-## 🏓 Pong Multiplayer
-
-Implementação do clássico Pong utilizando WebSockets.
-
-Permite estudar:
-
-* Sincronização de objetos
-* Compartilhamento de estados
-* Controle simultâneo de usuários
-* Atualização em tempo real
-
-## 🔥 Duelo de Aura
-
-Minigame competitivo baseado em eventos sincronizados.
-
-Características:
-
-* Sistema competitivo em tempo real
-* Atualização contínua de estado
-* Efeitos visuais compartilhados
-* Screen Shake global
-* Sistema de partículas dinâmicas
-
----
-
-# ⚙️ Arquitetura
-
-## Frontend
-
-Tecnologias utilizadas:
-
-* HTML5
-* CSS3
-* JavaScript Vanilla
-* Canvas 2D
-
-Responsável por:
-
-* Interface gráfica
-* Renderização
-* Captura de entrada do usuário
-* Reprodução de áudio
-
-## Backend
-
-Tecnologias utilizadas:
-
-* Python 3
-* asyncio
-* websockets
-* http.server
-* socketserver.ThreadingTCPServer
-
-Responsável por:
-
-* Gerenciamento de conexões
-* Controle das salas
-* Sincronização dos jogadores
-* Estado dos minigames
-* Distribuição de eventos
-
----
-
-# 🚀 Como Executar
-
-## Instalar dependências
+### Pré-requisitos
 
 ```bash
 pip install -r requirements.txt
 ```
 
-## Executar o servidor
+### Iniciar o servidor
 
 ```bash
 python server.py
 ```
 
-O sistema iniciará automaticamente:
+Ao iniciar, o terminal exibe:
 
-| Serviço   | Porta |
-| --------- | ----- |
-| HTTP      | 8000  |
-| WebSocket | 8080  |
+```
+=================================================================
+        SALA 33 — HUB DE EXECUÇÃO UNIFICADO (LAN ACTIVE)
+=================================================================
+» Salas registradas: the_hub, sala_jogos, museu, floresta, o_quarto
+» Sala inicial: the_hub
+» Carregando mecânicas de servidor:
+  ✓ server_mods.sala_jogos  →  ['interagir_pong', 'comando_pong', 'sair_pong']
+  ✓ server_mods.o_quarto    →  ['interagir_aura', 'spam_aura', 'sair_aura']
+-----------------------------------------------------------------
+» Endereço IP Local: 192.168.x.x
+🌍 ACESSO AO SITE (HTTP)  : http://192.168.x.x:8000
+⚡ REDE DO MULTIPLAYER (WS): ws://192.168.x.x:8080
+=================================================================
+```
 
-## Acessar
+### Acessar
 
-Abra o navegador:
+Abra no navegador (qualquer dispositivo na mesma rede):
 
-```text
+```
 http://SEU_IP_LOCAL:8000
 ```
 
-Exemplo:
+| Serviço | Porta |
+|---|---|
+| HTTP (frontend) | 8000 |
+| WebSocket (multiplayer) | 8080 |
 
-```text
-http://192.168.0.10:8000
+---
+
+## 🎮 Controles
+
+| Ação | Tecla |
+|---|---|
+| Mover | WASD ou Setas |
+| Interagir | E |
+| Chat | Enter |
+| Sair de interação / minigame | Q |
+| Duelo de Aura (spam) | Espaço |
+| Volume | F1 |
+| Debug (hitboxes e grid) | F2 |
+
+---
+
+## 🏗️ Arquitetura
+
+### Visão Geral
+
+O servidor é **autoritativo**: todo estado global (posições, pontuações, minigames) vive nele. O cliente é responsável apenas por renderizar e enviar inputs.
+
+```
+Cliente (browser)                    Servidor (Python)
+─────────────────                    ─────────────────
+index.html + game.js                 server.py
+      │                                    │
+      │   WebSocket JSON messages          │
+      │ ◄─────────────────────────────►   │
+      │                                    │
+  Canvas 2D                         asyncio + websockets
+  Plugin system                     ThreadingTCPServer (HTTP)
+  Lazy audio                        server_mods/*.py (mecânicas)
 ```
 
-Todos os dispositivos conectados à mesma rede poderão acessar o ambiente multiplayer.
+### Protocolo de Mensagens
+
+Todas as mensagens são JSON com um campo `"tipo"`. Exemplos:
+
+| `tipo` | Direção | Descrição |
+|---|---|---|
+| `login` | cliente → servidor | Autentica e entra na sala inicial |
+| `mover` | cliente → servidor | Atualiza posição |
+| `mudar_sala` | cliente → servidor | Troca de sala via porta |
+| `chat` | bidirecional | Mensagem de texto |
+| `novo_jogador` | servidor → cliente | Notifica entrada de jogador |
+| `movimento` | servidor → cliente | Broadcast de posição |
+| `jogador_saiu` | servidor → cliente | Notifica saída |
+| `atualizacao_pong` | servidor → cliente | Estado do Pong a 60fps |
+| `atualizacao_aura` | servidor → cliente | Estado do Duelo de Aura |
+
+### Estrutura de Arquivos
+
+```
+Sala33/
+├── server.py                    ← engine do servidor
+├── server_mods/                 ← mecânicas server-side por sala
+│   ├── sala_jogos.py            (Pong)
+│   └── o_quarto.py              (Duelo de Aura)
+└── public/
+    ├── index.html
+    ├── game.js                  ← engine do cliente
+    ├── assets/
+    │   ├── maps/                ← imagens de fundo
+    │   ├── characters/          ← sprites
+    │   ├── music/               ← trilhas
+    │   └── artworks/            ← obras do museu
+    └── mods/
+        ├── manifest.json        ← lista o que carregar
+        ├── personagens.json     ← roster de personagens
+        ├── salas/               ← um JSON por sala
+        └── logicas/             ← plugins JS client-side por sala
+```
+
+### Sistema de Mods
+
+O jogo carrega toda a configuração do mundo de `public/mods/` dinamicamente. O servidor descobre mecânicas novas em `server_mods/` automaticamente ao iniciar.
+
+**Adicionar uma sala nova** não exige tocar no engine — só criar um JSON, colocar os assets nas pastas certas e registrar no `manifest.json`.
 
 ---
 
-# 🎮 Controles
+## 🧩 Contribuindo
 
-| Ação              | Tecla         |
-| ----------------- | ------------- |
-| Movimentação      | WASD ou Setas |
-| Interagir         | E             |
-| Chat              | Enter         |
-| Sair de interação | Q             |
-| Duelo de Aura     | Espaço        |
-| Debug             | F2            |
+O projeto foi pensado para que qualquer pessoa possa criar conteúdo novo sem precisar entender o engine. O fluxo mínimo pra uma sala nova:
 
----
+1. Coloque a imagem em `public/assets/maps/`
+2. Crie `public/mods/salas/minha_sala.json`
+3. Adicione o ID em `public/mods/manifest.json`
 
-# 📚 Conceitos Estudados
-
-* Sistemas Distribuídos
-* WebSockets
-* Programação Assíncrona
-* Multiplayer em Tempo Real
-* Broadcast de Eventos
-* Gerenciamento de Estado
-* Canvas API
-* Game Loop
-* Sincronização Cliente-Servidor
-* Lazy Loading
-* Threading em Python
+Para mecânicas interativas (minigames, puzzles, NPCs), veja o **[MODDING.md](./MODDING.md)** — tem a API completa dos plugins com exemplos.
 
 ---
 
-# 📌 Considerações Finais
+## 📚 Conceitos de Sistemas Distribuídos Aplicados
 
-O SALA 33 foi desenvolvido como projeto prático da disciplina de Sistemas Distribuídos com o objetivo de aplicar conceitos de comunicação em tempo real, sincronização de estado, concorrência e arquitetura cliente-servidor.
+| Conceito | Implementação |
+|---|---|
+| Comunicação persistente | WebSockets (conexão contínua, sem polling) |
+| Protocolo de mensagens | JSON tipado com campo `tipo` |
+| Estado autoritativo | Servidor é a única fonte da verdade |
+| Broadcast seletivo | Eventos propagados apenas para jogadores da mesma sala |
+| Concorrência | `asyncio` com fila de mensagens por conexão (`asyncio.Queue`) |
+| Separação de responsabilidades | HTTP (estático) e WS (tempo real) em portas diferentes |
+| Lazy loading | Áudio só carregado ao entrar na sala |
+| Modularidade | Mecânicas isoladas em módulos Python e plugins JS |
 
-A utilização de WebSockets permitiu implementar um ambiente multiplayer interativo capaz de manter múltiplos clientes sincronizados através de um servidor central autoritativo, demonstrando na prática desafios comuns encontrados em aplicações distribuídas modernas.
+---
+
+## 🛠️ Stack
+
+**Backend:** Python 3 · asyncio · websockets · http.server · ThreadingTCPServer
+
+**Frontend:** HTML5 · CSS3 · JavaScript Vanilla · Canvas 2D API

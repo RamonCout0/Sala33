@@ -1,0 +1,18 @@
+{
+  "id": "o_quarto",
+  "nome": "O QUARTO",
+  "corFundo": "#050505",
+  "imagem": "assets/maps/o_quarto.png",
+  "musica": "assets/music/musica_quarto.mp3",
+  "musicasExtras": {
+    "_comentario": "Músicas adicionais. Use tocarMusica('aura') no plugin para tocar.",
+    "aura": "assets/music/musica_aura.mp3"
+  },
+  "portas": [
+    { "destino": "the_hub", "x": 180, "y": 0, "w": 40, "h": 20, "spawnX": 214, "spawnY": 250 }
+  ],
+  "extras": {
+    "_comentario": "TV onde rola o duelo de aura. A lógica está em mods/logicas/o_quarto.js (cliente) e server_mods/o_quarto.py (servidor).",
+    "tvAura": { "x": 195, "y": 250, "w": 40, "h": 30 }
+  }
+}

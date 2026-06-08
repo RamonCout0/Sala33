@@ -1,0 +1,18 @@
+{
+  "id": "museu",
+  "nome": "MUSEU",
+  "corFundo": "#111111",
+  "imagem": "assets/maps/museu.png",
+  "musica": "assets/music/musica_museu.mp3",
+  "portas": [
+    { "destino": "the_hub", "x": 0, "y": 130, "w": 20, "h": 40, "spawnX": 315, "spawnY": 160 }
+  ],
+  "extras": {
+    "_comentario": "Lista de quadros da galeria. Para adicionar uma obra: coloque a imagem em assets/artworks/ e adicione um item aqui.",
+    "quadros": [
+      { "id": "mercado",   "x": 45,  "y": 43, "w": 60, "h": 40, "titulo": "MERCADO NOIR", "imagem": "assets/artworks/mercado.png" },
+      { "id": "tarrasque", "x": 164, "y": 36, "w": 60, "h": 40, "titulo": "O TARRASQUE",  "imagem": "assets/artworks/tarrasque.png" },
+      { "id": "bioform",   "x": 301, "y": 37, "w": 60, "h": 40, "titulo": "BIOFORM",      "imagem": "assets/artworks/bioform.png" }
+    ]
+  }
+}

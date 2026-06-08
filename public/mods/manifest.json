@@ -1,0 +1,16 @@
+{
+  "_comentario": "Lista as salas e lógicas que o jogo deve carregar. Adicione o ID da sua sala aqui para que ela seja registrada no jogo.",
+  "salaInicial": "the_hub",
+  "salas": [
+    "the_hub",
+    "sala_jogos",
+    "museu",
+    "floresta",
+    "o_quarto"
+  ],
+  "logicas": [
+    "sala_jogos",
+    "museu",
+    "o_quarto"
+  ]
+}

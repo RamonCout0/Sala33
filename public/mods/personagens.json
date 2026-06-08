@@ -1,0 +1,9 @@
+[
+  { "id": "cinzaguy",  "nome": "CINZA GUY", "sprite": "assets/characters/cinzaguy.png" },
+  { "id": "bailarina", "nome": "BAILARINA", "sprite": "assets/characters/bailarina.png" },
+  { "id": "cat",       "nome": "GATO",      "sprite": "assets/characters/cat.png" },
+  { "id": "dog",       "nome": "CACHORRO",  "sprite": "assets/characters/dog.png" },
+  { "id": "nututu",    "nome": "NUTUTU",    "sprite": "assets/characters/nututu.png" },
+  { "id": "portalel",  "nome": "PORTALEL",  "sprite": "assets/characters/portalel.png" },
+  { "id": "iluminus",  "nome": "ILUMINUS",  "sprite": "assets/characters/iluminus.png" }
+]

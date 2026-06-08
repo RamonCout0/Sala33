@@ -102,14 +102,7 @@
         <div class="selector-container">
             <div class="selector-fields">
                 <label>PERSONAGEM (32x32):</label>
-                <select id="spriteSelect" onchange="atualizarPreviewSkin()">
-                    <option value="cinzaguy">CINZA GUY</option>
-                    <option value="bailarina">BAILARINA</option>
-                    <option value="cat">GATO</option>
-                    <option value="dog">CACHORRO</option>
-                    <option value="nututu">NUTUTU</option>
-                    <option value="portalel">Portalel</option>
-                    <option value="iluminus">Iluminus</option>
+                <select id="spriteSelect">
                 </select>
             </div>
             <div class="preview-window" id="previewWinBox">
@@ -118,7 +111,7 @@
             </div>
         </div>
 
-        <button onclick="conectar()">ENTRAR</button>
+        <button id="btnEntrar" onclick="conectar()">ENTRAR</button>
     </div>
 
     <div id="gameUI">
@@ -140,7 +133,7 @@
         </div>
     </div>
 
-    <script src="game.js?v=2"></script>
+    <script src="game.js"></script>
 
     <div id="configMenu" style="display: none; position: absolute; top: 10px; left: 10px; background: #161616; padding: 15px; border: 1px solid #fff; color: #fff; font-family: monospace;">
         <div>VOLUME</div>

@@ -1,0 +1,18 @@
+{
+  "id": "sala_jogos",
+  "nome": "SALA DE JOGOS",
+  "corFundo": "#444444",
+  "imagem": "assets/maps/sala_jogos.png",
+  "musica": "assets/music/musica_jogos.mp3",
+  "musicasExtras": {
+    "_comentario": "Músicas adicionais que a lógica desta sala pode tocar. Use tocarMusica('pong') no plugin para tocar.",
+    "pong": "assets/music/musica_pong.mp3"
+  },
+  "portas": [
+    { "destino": "the_hub", "x": 380, "y": 130, "w": 20, "h": 40, "spawnX": 45, "spawnY": 225 }
+  ],
+  "extras": {
+    "_comentario": "Configurações específicas da sala. A lógica do minigame está em mods/logicas/sala_jogos.js (cliente) e server_mods/sala_jogos.py (servidor).",
+    "mesaPong": { "x": 180, "y": 195, "w": 130, "h": 30 }
+  }
+}
