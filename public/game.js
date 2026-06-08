@@ -21,13 +21,9 @@ const intervaloFps = 1000 / 60;
 let mouseX = 0; let mouseY = 0; let mostrarDebug = false; 
 
 // ==========================================
-// 🎶 SISTEMA DE ÁUDIO DINÂMICO
-// Substitua pelos nomes exatos dos seus arquivos de música!
+// 🎶 SISTEMA DE ÁUDIO (LAZY LOAD OTIMIZADO)
 // ==========================================
-// ==========================================
-// 🎶 SISTEMA DE ÁUDIO COM VOLUME E PREVENÇÃO DE TRAVA
-// ==========================================
-let volumeGeral = 0.5; // De 0.0 a 1.0
+let volumeGeral = 0.5; 
 const AUDIO_PATHS = {
     "the_hub": "assets/musica_hub.mp3",
     "sala_jogos": "assets/musica_jogos.mp3",
@@ -39,32 +35,31 @@ const AUDIO_PATHS = {
 };
 
 const audios = {};
-for(let id in AUDIO_PATHS) {
-    audios[id] = new Audio(AUDIO_PATHS[id]);
-    audios[id].loop = true;
-    audios[id].volume = volumeGeral; // Aplica o volume inicial
-}
 let audioTocando = null;
 
-// Função de Troca Inteligente
 function tocarMusica(id) {
-    if (!audios[id]) return;
-    if (audioTocando === audios[id]) return;
+    if (!AUDIO_PATHS[id]) return;
     
-    // Fade Out rápido (opcional) e troca
+    // A MÁGICA: Só faz o download da música se você entrar na sala dela!
+    if (!audios[id]) {
+        audios[id] = new Audio(AUDIO_PATHS[id]);
+        audios[id].loop = true;
+        audios[id].volume = volumeGeral;
+    }
+
+    if (audioTocando === audios[id]) return; 
     if (audioTocando) { audioTocando.pause(); audioTocando.currentTime = 0; }
     
     audioTocando = audios[id];
-    audioTocando.volume = volumeGeral; // Garante o volume atual
-    audioTocando.play().catch(e => console.log("Áudio bloqueado pelo navegador"));
+    audioTocando.volume = volumeGeral;
+    audioTocando.play().catch(e => console.log("Aguardando clique para tocar..."));
 }
 
-// Função para aumentar/diminuir volume (Chame no console ou crie um menu)
 function ajustarVolume(novoVolume) {
-    volumeGeral = Math.max(0, Math.min(1, novoVolume));
+    volumeGeral = Math.max(0, Math.min(1, parseFloat(novoVolume)));
     for(let id in audios) { audios[id].volume = volumeGeral; }
-    console.log("Volume alterado para: " + volumeGeral);
 }
+window.ajustarVolume = ajustarVolume;
 
 // ==========================================
 // DADOS DOS OBJETOS E ZONAS INTERATIVAS
@@ -127,7 +122,20 @@ function atualizarPreviewSkin() {
 }
 window.atualizarPreviewSkin = atualizarPreviewSkin;
 
-function traduzirEmotes(texto) { return texto.replace(/:\)/g, "(•‿•)").replace(/:\(/g, "(╥﹏╥)").replace(/<3/g, "(❤️)").replace(/:[oO]/g, "(o_O)").replace(/:[dD]/g, "(≧◡≦)").replace(/;\)/g, "(━╤┳━)"); }
+ // Tradutor de Emotes (para quando você digita no chat)
+function traduzirEmotes(texto) { 
+    return texto.replace(/:\)/g, "(•‿•)").replace(/:\(/g, "(╥﹏╥)").replace(/<3/g, "(❤️)").replace(/:[oO]/g, "(o_O)").replace(/:[dD]/g, "(≧◡≦)").replace(/;\)/g, "(━╤┳━)"); 
+}
+
+// Função dos botões da interface (para os cliques)
+function enviarEmote(emote) {
+    if (ws && ws.readyState === WebSocket.OPEN) {
+        ws.send(JSON.stringify({ tipo: 'chat', texto: emote }));
+        meuBicho.chatTexto = emote;
+        meuBicho.chatTimer = 240;
+    }
+}
+window.enviarEmote = enviarEmote;
 
 const MAPAS = {
     "the_hub": { nome: "THE HUB", corFundo: "#2a2a2a", imagemPath: "assets/the_hub.png", portas: [ { destino: "sala_jogos", x: 0, y: 215, w: 26, h: 36, spawnX: 330, spawnY: 134 }, { destino: "museu", x: 365, y: 100, w: 35, h: 130, spawnX: 30, spawnY: 134 }, { destino: "floresta", x: 35, y: 60, w: 60, h: 90, spawnX: 184, spawnY: 230 }, { destino: "o_quarto", x: 180, y: 292, w: 70, h: 8, spawnX: 184, spawnY: 40 } ] },

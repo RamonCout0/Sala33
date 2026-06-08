@@ -58,7 +58,7 @@
         #spritePreview {
             width: 32px; height: 32px;
             image-rendering: pixelated;
-            display: none; /* Só aparece via JS quando a imagem carregar */
+            display: none;
         }
         .preview-fallback {
             font-size: 9px; color: #444444; text-align: center; font-weight: bold;
@@ -127,12 +127,13 @@
             <div id="chatBox"></div>
             
             <div id="emoteBar">
-                <button class="emote-btn" onclick="enviarEmoteDirect('(•‿•)')"> feliz </button>
-                <button class="emote-btn" onclick="enviarEmoteDirect('(╥﹏╥)')"> chorar </button>
-                <button class="emote-btn" onclick="enviarEmoteDirect('(❤️)')"> love </button>
-                <button class="emote-btn" onclick="enviarEmoteDirect('(o_O)')"> hã? </button>
-                <button class="emote-btn" onclick="enviarEmoteDirect('(≧◡≦)')"> rir </button>
-                <button class="emote-btn" onclick="enviarEmoteDirect('(━╤┳━)')"> bravo </button>
+                <!-- CORRIGIDO: Agora chamam a função correta enviarEmote -->
+                <button class="emote-btn" onclick="enviarEmote('(•‿•)')"> feliz </button>
+                <button class="emote-btn" onclick="enviarEmote('(╥﹏╥)')"> chorar </button>
+                <button class="emote-btn" onclick="enviarEmote('(❤️)')"> love </button>
+                <button class="emote-btn" onclick="enviarEmote('(o_O)')"> hã? </button>
+                <button class="emote-btn" onclick="enviarEmote('(≧◡≦)')"> rir </button>
+                <button class="emote-btn" onclick="enviarEmote('(━╤┳━)')"> bravo </button>
             </div>
 
             <input type="text" id="chatInput" placeholder="Pressione ENTER para falar...">
@@ -142,9 +143,9 @@
     <script src="game.js?v=2"></script>
 
     <div id="configMenu" style="display: none; position: absolute; top: 10px; left: 10px; background: #161616; padding: 15px; border: 1px solid #fff; color: #fff; font-family: monospace;">
-    <div>VOLUME</div>
-    <input type="range" id="volumeSlider" min="0" max="1" step="0.1" value="0.5" oninput="ajustarVolume(this.value)">
-    <div style="font-size: 8px; margin-top: 5px;">[F1] FECHAR</div>
-</div>
+        <div>VOLUME</div>
+        <input type="range" id="volumeSlider" min="0" max="1" step="0.1" value="0.5" oninput="ajustarVolume(this.value)">
+        <div style="font-size: 8px; margin-top: 5px;">[F1] FECHAR</div>
+    </div>
 </body>
 </html>

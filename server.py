@@ -3,17 +3,11 @@ import json
 import websockets
 import os
 import socket
-import subprocess
-import platform
 import threading
-import time
 import random
 from http.server import SimpleHTTPRequestHandler 
-from socketserver import TCPServer               
+from socketserver import ThreadingTCPServer # <--- Olha o import correto aqui!
 
-# ==========================================
-# CONFIGURAÇÕES DE ESTADO MULTIPLAYER E MINIGAMES
-# ==========================================
 JOGADORES = {}
 SALAS = {
     "the_hub": set(), "museu": set(), "floresta": set(), 
@@ -89,9 +83,9 @@ async def loop_minigames():
                 except Exception: pass
 
         # --- AURA PVP ---
-        if AURA_STATE["p1_ws"] or AURA_STATE["p2_ws"]:
-            AURA_STATE["p1_poder"] = max(0, AURA_STATE["p1_poder"] - 1.5)
-            AURA_STATE["p2_poder"] = max(0, AURA_STATE["p2_poder"] - 1.5)
+        if AURA_STATE["ativo"]:
+            AURA_STATE["p1_poder"] = max(0, AURA_STATE["p1_poder"] - 0.1)
+            AURA_STATE["p2_poder"] = max(0, AURA_STATE["p2_poder"] - 0.1)
             
             for ws in list(SALAS["o_quarto"]):
                 if ws in JOGADORES:
@@ -244,6 +238,7 @@ async def handler(websocket):
                     JOGADORES[websocket]["x"] = 175 
                     JOGADORES[websocket]["y"] = 265 
                     JOGADORES[websocket]["lado"] = "direita"
+                    AURA_STATE["ativo"] = True # <--- TV LIGA AQUI (Farm solo funcionando)
                     voce_sentou = True
                     sou_p1 = True
                 elif not AURA_STATE["p2_ws"] and AURA_STATE["p1_ws"] != websocket:
@@ -264,8 +259,17 @@ async def handler(websocket):
                     }))
 
             elif dados["tipo"] == "spam_aura":
-                if websocket == AURA_STATE["p1_ws"]: AURA_STATE["p1_poder"] += 15
-                elif websocket == AURA_STATE["p2_ws"]: AURA_STATE["p2_poder"] += 15
+                if AURA_STATE["ativo"]:
+                    if websocket == AURA_STATE["p1_ws"]: 
+                        AURA_STATE["p1_poder"] += 15
+                        if AURA_STATE["p1_poder"] >= 7000:
+                            await enviar_para_sala("o_quarto", {"tipo": "chat", "username": "SISTEMA", "texto": "P1 VENCEU O DUELO DE AURA!"})
+                            abandonar_minigames(websocket)
+                    elif websocket == AURA_STATE["p2_ws"]: 
+                        AURA_STATE["p2_poder"] += 15
+                        if AURA_STATE["p2_poder"] >= 7000:
+                            await enviar_para_sala("o_quarto", {"tipo": "chat", "username": "SISTEMA", "texto": "P2 VENCEU O DUELO DE AURA!"})
+                            abandonar_minigames(websocket)
 
             elif dados["tipo"] == "sair_aura":
                 abandonar_minigames(websocket)
@@ -296,11 +300,26 @@ def pegar_ip_local():
 
 def rodar_servidor_web_background():
     dir_alvo = "public" if os.path.exists("public") else "."
+    
     class HandlerCustomizado(SimpleHTTPRequestHandler):
-        def __init__(self, *args, **kwargs): super().__init__(*args, directory=dir_alvo, **kwargs)
-    TCPServer.allow_reuse_address = True
+        def __init__(self, *args, **kwargs): 
+            super().__init__(*args, directory=dir_alvo, **kwargs)
+        # CALA A BOCA DO TERMINAL: Impede o spam de arquivos estáticos
+        def log_message(self, format, *args):
+            pass 
+
+    # O VERDADEIRO MOTOR MULTITHREAD E BLINDADO CONTRA ERROS
+    class ServidorSilenciosoMultithread(ThreadingTCPServer):
+        allow_reuse_address = True
+        daemon_threads = True 
+        
+        # IGNORA O BROKEN PIPE
+        def handle_error(self, request, client_address):
+            pass 
+
     try:
-        with TCPServer(("", 8000), HandlerCustomizado) as httpd: httpd.serve_forever()
+        with ServidorSilenciosoMultithread(("", 8000), HandlerCustomizado) as httpd: 
+            httpd.serve_forever()
     except Exception: pass
 
 async def main():
