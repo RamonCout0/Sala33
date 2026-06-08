@@ -282,4 +282,67 @@ Os JSONs e plugins são servidos com `Cache-Control: no-cache`, então é só re
 
 ---
 
+## 🤝 Como contribuir via Git
+
+### 1. Fork e clone
+
+Faça um fork do repositório pelo GitHub e clone o seu fork localmente:
+
+```bash
+git clone https://github.com/SEU_USUARIO/Sala33.git
+cd Sala33
+```
+
+### 2. Crie uma branch para o seu conteúdo
+
+Nunca trabalhe direto na `main`. Crie uma branch com um nome descritivo:
+
+```bash
+git checkout -b sala/nome-da-sua-sala
+# ou
+git checkout -b personagem/nome-do-personagem
+# ou
+git checkout -b fix/descricao-do-bug
+```
+
+### 3. Faça suas alterações e commit
+
+```bash
+git add .
+git commit -m "sala: adiciona biblioteca_arcana com puzzle de livros"
+```
+
+Use prefixos no commit pra deixar claro o tipo de contribuição:
+
+| Prefixo | Quando usar |
+|---|---|
+| `sala:` | Nova sala ou alteração em sala existente |
+| `personagem:` | Novo sprite de personagem |
+| `fix:` | Correção de bug |
+| `refactor:` | Mudança interna sem alterar comportamento |
+| `docs:` | Atualização de documentação |
+
+### 4. Abra um Pull Request
+
+Suba sua branch e abra um PR no repositório original:
+
+```bash
+git push origin sala/nome-da-sua-sala
+```
+
+No PR, descreva brevemente o que sua contribuição adiciona e inclua um screenshot do jogo rodando com sua sala/personagem.
+
+### 5. Mantenha seu fork atualizado
+
+Antes de começar algo novo, sincronize com o repositório original pra evitar conflitos:
+
+```bash
+git remote add upstream https://github.com/RamonCout0/Sala33.git
+git fetch upstream
+git checkout main
+git merge upstream/main
+```
+
+---
+
 Dúvidas? Olhe `server_mods/sala_jogos.py` e `mods/logicas/sala_jogos.js` — são os exemplos mais completos.
