@@ -12,7 +12,7 @@ from http.server import SimpleHTTPRequestHandler
 from socketserver import TCPServer               
 
 # ==========================================
-# CONFIGURAÇÕES DE ESTADO MULTIPLAYER E PONG
+# CONFIGURAÇÕES DE ESTADO MULTIPLAYER E MINIGAMES
 # ==========================================
 JOGADORES = {}
 SALAS = {
@@ -24,8 +24,14 @@ PONG_STATE = {
     "p1_ws": None, "p2_ws": None,
     "p1_y": 60, "p2_y": 60,
     "bola_x": 100, "bola_y": 75,
-    "bola_dx": 0, "bola_dy": 0, # Começa parada no centro
+    "bola_dx": 0, "bola_dy": 0,
     "p1_score": 0, "p2_score": 0,
+    "ativo": False
+}
+
+AURA_STATE = {
+    "p1_ws": None, "p2_ws": None,
+    "p1_poder": 0, "p2_poder": 0,
     "ativo": False
 }
 
@@ -44,35 +50,31 @@ async def enviar_para_sala(sala_nome, payload):
                 except Exception:
                     pass
 
-async def loop_fisica_pong():
-    global PONG_STATE
+async def loop_minigames():
+    global PONG_STATE, AURA_STATE
     while True:
         await asyncio.sleep(1 / 60)
         
+        # --- PONG ---
         if PONG_STATE["ativo"]:
             PONG_STATE["bola_x"] += PONG_STATE["bola_dx"]
             PONG_STATE["bola_y"] += PONG_STATE["bola_dy"]
             
-            if PONG_STATE["bola_y"] <= 2 or PONG_STATE["bola_y"] >= 146:
-                PONG_STATE["bola_dy"] *= -1
-                
+            if PONG_STATE["bola_y"] <= 2 or PONG_STATE["bola_y"] >= 146: PONG_STATE["bola_dy"] *= -1
             if PONG_STATE["bola_x"] <= 10:
                 if PONG_STATE["p1_y"] <= PONG_STATE["bola_y"] <= PONG_STATE["p1_y"] + 25:
                     PONG_STATE["bola_dx"] = abs(PONG_STATE["bola_dx"]) * 1.05
                     PONG_STATE["bola_dy"] = ((PONG_STATE["bola_y"] - (PONG_STATE["p1_y"] + 12.5)) / 12.5) * 2
                 else:
-                    PONG_STATE["p2_score"] += 1
-                    reset_bola_pong()
-                    
+                    PONG_STATE["p2_score"] += 1; reset_bola_pong()
             if PONG_STATE["bola_x"] >= 190:
                 if PONG_STATE["p2_y"] <= PONG_STATE["bola_y"] <= PONG_STATE["p2_y"] + 25:
                     PONG_STATE["bola_dx"] = -abs(PONG_STATE["bola_dx"]) * 1.05
                     PONG_STATE["bola_dy"] = ((PONG_STATE["bola_y"] - (PONG_STATE["p2_y"] + 12.5)) / 12.5) * 2
                 else:
-                    PONG_STATE["p1_score"] += 1
-                    reset_bola_pong()
+                    PONG_STATE["p1_score"] += 1; reset_bola_pong()
 
-        payload = {
+        payload_pong = {
             "tipo": "atualizacao_pong",
             "estado": {
                 "p1_y": int(PONG_STATE["p1_y"]), "p2_y": int(PONG_STATE["p2_y"]),
@@ -80,45 +82,51 @@ async def loop_fisica_pong():
                 "p1_score": PONG_STATE["p1_score"], "p2_score": PONG_STATE["p2_score"]
             }
         }
-        
         for ws in list(SALAS["sala_jogos"]):
             if ws in JOGADORES:
-                payload["voce_esta_jogando"] = (ws == PONG_STATE["p1_ws"] or ws == PONG_STATE["p2_ws"])
-                try:
-                    JOGADORES[ws]["queue"].put_nowait(json.dumps(payload))
-                except Exception:
-                    pass
+                payload_pong["voce_esta_jogando"] = (ws == PONG_STATE["p1_ws"] or ws == PONG_STATE["p2_ws"])
+                try: JOGADORES[ws]["queue"].put_nowait(json.dumps(payload_pong))
+                except Exception: pass
+
+        # --- AURA PVP ---
+        if AURA_STATE["p1_ws"] or AURA_STATE["p2_ws"]:
+            AURA_STATE["p1_poder"] = max(0, AURA_STATE["p1_poder"] - 1.5)
+            AURA_STATE["p2_poder"] = max(0, AURA_STATE["p2_poder"] - 1.5)
+            
+            for ws in list(SALAS["o_quarto"]):
+                if ws in JOGADORES:
+                    payload_aura = {
+                        "tipo": "atualizacao_aura",
+                        "voce_esta_jogando": (ws == AURA_STATE["p1_ws"] or ws == AURA_STATE["p2_ws"]),
+                        "sou_p1": (ws == AURA_STATE["p1_ws"]),
+                        "estado": {
+                            "p1_poder": AURA_STATE["p1_poder"],
+                            "p2_poder": AURA_STATE["p2_poder"],
+                            "p1_sprite": JOGADORES[AURA_STATE["p1_ws"]]["spriteId"] if AURA_STATE["p1_ws"] in JOGADORES else "cinzaguy",
+                            "p2_sprite": JOGADORES[AURA_STATE["p2_ws"]]["spriteId"] if AURA_STATE["p2_ws"] in JOGADORES else "cinzaguy"
+                        }
+                    }
+                    try: JOGADORES[ws]["queue"].put_nowait(json.dumps(payload_aura))
+                    except Exception: pass
 
 def reset_bola_pong():
     global PONG_STATE
-    PONG_STATE["bola_x"] = 100
-    PONG_STATE["bola_y"] = 75
+    PONG_STATE["bola_x"] = 100; PONG_STATE["bola_y"] = 75
     PONG_STATE["bola_dx"] = 2.5 if random.choice([True, False]) else -2.5
     PONG_STATE["bola_dy"] = 1.2 if random.choice([True, False]) else -1.2
 
-# NOVO: Função de Faxina que zera tudo se alguém fugir da partida
-def abandonar_pong(ws):
-    global PONG_STATE
-    mudou = False
-    
-    if ws == PONG_STATE["p1_ws"]:
-        PONG_STATE["p1_ws"] = None
-        mudou = True
-    elif ws == PONG_STATE["p2_ws"]:
-        PONG_STATE["p2_ws"] = None
-        mudou = True
-        
-    if mudou:
-        # Alguém saiu! Congela o jogo e reseta o cenário pros próximos
-        PONG_STATE["ativo"] = False
-        PONG_STATE["p1_score"] = 0
-        PONG_STATE["p2_score"] = 0
-        PONG_STATE["p1_y"] = 60
-        PONG_STATE["p2_y"] = 60
-        PONG_STATE["bola_x"] = 100
-        PONG_STATE["bola_y"] = 75
-        PONG_STATE["bola_dx"] = 0
-        PONG_STATE["bola_dy"] = 0
+def abandonar_minigames(ws):
+    global PONG_STATE, AURA_STATE
+    if ws == PONG_STATE["p1_ws"] or ws == PONG_STATE["p2_ws"]:
+        if ws == PONG_STATE["p1_ws"]: PONG_STATE["p1_ws"] = None
+        if ws == PONG_STATE["p2_ws"]: PONG_STATE["p2_ws"] = None
+        PONG_STATE["ativo"] = False; PONG_STATE["p1_score"] = 0; PONG_STATE["p2_score"] = 0
+        PONG_STATE["p1_y"] = 60; PONG_STATE["p2_y"] = 60; PONG_STATE["bola_x"] = 100; PONG_STATE["bola_y"] = 75
+        PONG_STATE["bola_dx"] = 0; PONG_STATE["bola_dy"] = 0
+    if ws == AURA_STATE["p1_ws"] or ws == AURA_STATE["p2_ws"]:
+        if ws == AURA_STATE["p1_ws"]: AURA_STATE["p1_ws"] = None
+        if ws == AURA_STATE["p2_ws"]: AURA_STATE["p2_ws"] = None
+        AURA_STATE["ativo"] = False; AURA_STATE["p1_poder"] = 0; AURA_STATE["p2_poder"] = 0
 
 async def mover_jogador(websocket, nova_sala):
     if websocket not in JOGADORES: return
@@ -127,8 +135,7 @@ async def mover_jogador(websocket, nova_sala):
     if sala_antiga and websocket in SALAS[sala_antiga]:
         SALAS[sala_antiga].remove(websocket)
         await enviar_para_sala(sala_antiga, {"tipo": "jogador_saiu", "id": id(websocket)})
-        # Se mudou de sala, verifica se estava no Pong e reseta a máquina
-        abandonar_pong(websocket) 
+        abandonar_minigames(websocket) 
     
     usuarios_existentes = []
     for outro_ws in list(SALAS[nova_sala]):
@@ -164,9 +171,7 @@ async def escritor_cliente(websocket, queue):
 async def handler(websocket):
     queue = asyncio.Queue()
     JOGADORES[websocket] = {
-        "username": "Anônimo", "sala": None, 
-        "x": 200, "y": 150, "spriteId": "cinzaguy", 
-        "lado": "direita", "queue": queue
+        "username": "Anônimo", "sala": None, "x": 200, "y": 150, "spriteId": "cinzaguy", "lado": "direita", "queue": queue
     }
     tarefa_escrita = asyncio.create_task(escritor_cliente(websocket, queue))
     
@@ -200,48 +205,22 @@ async def handler(websocket):
             elif dados["tipo"] == "interagir_pong":
                 global PONG_STATE
                 voce_sentou = False
-                
                 if not PONG_STATE["p1_ws"]:
-                    PONG_STATE["p1_ws"] = websocket
-                    JOGADORES[websocket]["x"] = 185 
-                    JOGADORES[websocket]["y"] = 205 
-                    JOGADORES[websocket]["lado"] = "direita"
+                    PONG_STATE["p1_ws"] = websocket; JOGADORES[websocket]["x"] = 185; JOGADORES[websocket]["y"] = 205; JOGADORES[websocket]["lado"] = "direita"
                     voce_sentou = True
                 elif not PONG_STATE["p2_ws"] and PONG_STATE["p1_ws"] != websocket:
-                    PONG_STATE["p2_ws"] = websocket
-                    JOGADORES[websocket]["x"] = 270 
-                    JOGADORES[websocket]["y"] = 205 
-                    JOGADORES[websocket]["lado"] = "esquerda"
+                    PONG_STATE["p2_ws"] = websocket; JOGADORES[websocket]["x"] = 270; JOGADORES[websocket]["y"] = 205; JOGADORES[websocket]["lado"] = "esquerda"
                     voce_sentou = True
                 
                 if voce_sentou:
-                    # Avisa as coordenadas pra todo mundo
-                    await enviar_para_sala("sala_jogos", {
-                        "tipo": "movimento", "id": id(websocket), 
-                        "x": JOGADORES[websocket]["x"], "y": JOGADORES[websocket]["y"], 
-                        "lado": JOGADORES[websocket]["lado"]
-                    })
-                    
-                    # Checa: Se as duas cadeiras estão ocupadas, QUE COMECEM OS JOGOS!
+                    await enviar_para_sala("sala_jogos", {"tipo": "movimento", "id": id(websocket), "x": JOGADORES[websocket]["x"], "y": JOGADORES[websocket]["y"], "lado": JOGADORES[websocket]["lado"]})
                     if PONG_STATE["p1_ws"] and PONG_STATE["p2_ws"] and not PONG_STATE["ativo"]:
-                        PONG_STATE["ativo"] = True 
-                        PONG_STATE["p1_score"] = 0
-                        PONG_STATE["p2_score"] = 0
-                        reset_bola_pong() # Dispara a bola
+                        PONG_STATE["ativo"] = True; PONG_STATE["p1_score"] = 0; PONG_STATE["p2_score"] = 0; reset_bola_pong()
                     
-                    resposta_direta = {
-                        "tipo": "atualizacao_pong",
-                        "voce_esta_jogando": True,
-                        "meu_x": JOGADORES[websocket]["x"],
-                        "meu_y": JOGADORES[websocket]["y"],
-                        "meu_lado": JOGADORES[websocket]["lado"],
-                        "estado": {
-                            "p1_y": int(PONG_STATE["p1_y"]), "p2_y": int(PONG_STATE["p2_y"]),
-                            "bola_x": int(PONG_STATE["bola_x"]), "bola_y": int(PONG_STATE["bola_y"]),
-                            "p1_score": PONG_STATE["p1_score"], "p2_score": PONG_STATE["p2_score"]
-                        }
-                    }
-                    queue.put_nowait(json.dumps(resposta_direta))
+                    queue.put_nowait(json.dumps({
+                        "tipo": "atualizacao_pong", "voce_esta_jogando": True, "meu_x": JOGADORES[websocket]["x"], "meu_y": JOGADORES[websocket]["y"], "meu_lado": JOGADORES[websocket]["lado"],
+                        "estado": {"p1_y": int(PONG_STATE["p1_y"]), "p2_y": int(PONG_STATE["p2_y"]), "bola_x": int(PONG_STATE["bola_x"]), "bola_y": int(PONG_STATE["bola_y"]), "p1_score": PONG_STATE["p1_score"], "p2_score": PONG_STATE["p2_score"]}
+                    }))
 
             elif dados["tipo"] == "comando_pong":
                 if websocket == PONG_STATE["p1_ws"]:
@@ -252,13 +231,45 @@ async def handler(websocket):
                     elif dados["acao"] == "descer": PONG_STATE["p2_y"] = min(115, PONG_STATE["p2_y"] + 5)
 
             elif dados["tipo"] == "sair_pong":
-                # Reseta as máquinas usando a função global e esconde a tela preta
-                abandonar_pong(websocket)
-                queue.put_nowait(json.dumps({
-                    "tipo": "atualizacao_pong", 
-                    "voce_esta_jogando": False, 
-                    "estado": { "p1_y": 60, "p2_y": 60, "bola_x": 100, "bola_y": 75, "p1_score": 0, "p2_score": 0 }
-                }))
+                abandonar_minigames(websocket)
+                queue.put_nowait(json.dumps({"tipo": "atualizacao_pong", "voce_esta_jogando": False, "estado": { "p1_y": 60, "p2_y": 60, "bola_x": 100, "bola_y": 75, "p1_score": 0, "p2_score": 0 }}))
+
+            elif dados["tipo"] == "interagir_aura":
+                global AURA_STATE
+                voce_sentou = False
+                sou_p1 = False
+                
+                if not AURA_STATE["p1_ws"]:
+                    AURA_STATE["p1_ws"] = websocket
+                    JOGADORES[websocket]["x"] = 175 
+                    JOGADORES[websocket]["y"] = 265 
+                    JOGADORES[websocket]["lado"] = "direita"
+                    voce_sentou = True
+                    sou_p1 = True
+                elif not AURA_STATE["p2_ws"] and AURA_STATE["p1_ws"] != websocket:
+                    AURA_STATE["p2_ws"] = websocket
+                    JOGADORES[websocket]["x"] = 240 
+                    JOGADORES[websocket]["y"] = 265 
+                    JOGADORES[websocket]["lado"] = "esquerda"
+                    AURA_STATE["ativo"] = True
+                    AURA_STATE["p1_poder"] = 0
+                    AURA_STATE["p2_poder"] = 0
+                    voce_sentou = True
+                
+                if voce_sentou:
+                    await enviar_para_sala("o_quarto", {"tipo": "movimento", "id": id(websocket), "x": JOGADORES[websocket]["x"], "y": JOGADORES[websocket]["y"], "lado": JOGADORES[websocket]["lado"]})
+                    queue.put_nowait(json.dumps({
+                        "tipo": "atualizacao_aura", "voce_esta_jogando": True, "sou_p1": sou_p1, "meu_x": JOGADORES[websocket]["x"], "meu_y": JOGADORES[websocket]["y"], "meu_lado": JOGADORES[websocket]["lado"],
+                        "estado": {"p1_poder": AURA_STATE["p1_poder"], "p2_poder": AURA_STATE["p2_poder"], "p1_sprite": JOGADORES[websocket]["spriteId"], "p2_sprite": "cinzaguy"}
+                    }))
+
+            elif dados["tipo"] == "spam_aura":
+                if websocket == AURA_STATE["p1_ws"]: AURA_STATE["p1_poder"] += 15
+                elif websocket == AURA_STATE["p2_ws"]: AURA_STATE["p2_poder"] += 15
+
+            elif dados["tipo"] == "sair_aura":
+                abandonar_minigames(websocket)
+                queue.put_nowait(json.dumps({"tipo": "atualizacao_aura", "voce_esta_jogando": False, "estado": { "p1_poder": 0, "p2_poder": 0, "p1_sprite": "cinzaguy", "p2_sprite": "cinzaguy" }}))
 
             elif dados["tipo"] == "chat":
                 await enviar_para_sala(sala_atual, {"tipo": "chat", "username": JOGADORES[websocket]["username"], "texto": dados["texto"]})
@@ -270,8 +281,7 @@ async def handler(websocket):
         tarefa_escrita.cancel()
         if websocket in JOGADORES:
             sala_atual = JOGADORES[websocket]["sala"]
-            # Se o cara fechou a aba (desconectou), abandona o jogo e zera tudo
-            abandonar_pong(websocket)
+            abandonar_minigames(websocket)
             if sala_atual and websocket in SALAS[sala_atual]:
                 SALAS[sala_atual].discard(websocket)
                 await enviar_para_sala(sala_atual, {"tipo": "jogador_saiu", "id": id(websocket)})
@@ -300,7 +310,7 @@ async def main():
     ip_rede = pegar_ip_local()
     print(f"» Endereço IP Local Detectado: {ip_rede}")
     
-    asyncio.create_task(loop_fisica_pong())
+    asyncio.create_task(loop_minigames())
     threading.Thread(target=rodar_servidor_web_background, daemon=True).start()
     
     print("-" * 65)
