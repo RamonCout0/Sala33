@@ -10,10 +10,15 @@ import importlib
 import pkgutil
 import mimetypes
 import http
+import logging
 from http.server import SimpleHTTPRequestHandler
 from socketserver import ThreadingTCPServer
 from websockets.http11 import Response
 from websockets.datastructures import Headers as WsHeaders
+
+# Suprime erros de health check TCP do Railway (conexões vazias)
+logging.getLogger("websockets.server").setLevel(logging.CRITICAL)
+logging.getLogger("websockets.asyncio.server").setLevel(logging.CRITICAL)
 
 # Modo produção = qualquer cloud que define PORT (Railway, Render, Fly.io...)
 # Modo local = duas portas separadas (HTTP 8000 + WS 8080)
@@ -423,7 +428,11 @@ CONTENT_TYPES = {
     ".css":  "text/css",
     ".png":  "image/png",
     ".jpg":  "image/jpeg",
+    ".gif":  "image/gif",
+    ".mp4":  "video/mp4",
+    ".webm": "video/webm",
     ".mp3":  "audio/mpeg",
+    ".ogg":  "audio/ogg",
     ".ico":  "image/x-icon",
 }
 SEM_CACHE = {".js", ".json"}

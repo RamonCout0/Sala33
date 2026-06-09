@@ -54,8 +54,64 @@ Pra criar uma sala chamada `minha_sala`:
 
 ### 1. Coloque os assets
 
-- Fundo: `public/assets/maps/minha_sala.png`
+- Fundo: `public/assets/maps/minha_sala.png` (PNG, JPG, GIF ou MP4/WEBM para fundo animado)
 - Música: `public/assets/music/minha_sala.mp3` (opcional)
+
+> **Sobre GIF e MP4 como fundo:** GIF é exibido como imagem estática no canvas (só o primeiro frame). Para fundo animado de verdade, use MP4 ou WEBM e implemente via plugin em `mods/logicas/` usando um elemento `<video>` como fonte do `drawImage` a cada frame.
+
+**Exemplo de plugin com fundo em vídeo animado:**
+
+`public/mods/logicas/minha_sala.js`:
+```js
+SALA33_REGISTRAR("minha_sala", {
+    _video: null,
+    _pronto: false,
+
+    onEnter(salaConfig) {
+        // Cria o elemento de vídeo em background (nunca aparece no DOM)
+        this._video = document.createElement("video");
+        this._video.src = salaConfig.imagemPath; // aponta pro .mp4 ou .webm
+        this._video.loop = true;
+        this._video.muted = true;  // obrigatório pra autoplay funcionar
+        this._video.playsInline = true;
+        this._video.play().catch(() => {});
+        this._pronto = false;
+        this._video.addEventListener("canplay", () => { this._pronto = true; });
+    },
+
+    onSair() {
+        if (this._video) {
+            this._video.pause();
+            this._video.src = "";
+            this._video = null;
+        }
+        this._pronto = false;
+    },
+
+    onMensagem() { return false; },
+    onTeclaDown() { return false; },
+    onFisica() { return { bloqueiaMovimento: false, tremor: 0 }; },
+
+    render(ctx, meuBicho, outrosJogadores, imagensSprites, tamSprite) {
+        // Desenha o vídeo como fundo a cada frame
+        // (sobrescreve o fundo estático do engine)
+        if (this._pronto && this._video) {
+            ctx.drawImage(this._video, 0, 0, ctx.canvas.width, ctx.canvas.height);
+        }
+    },
+});
+```
+
+No JSON da sala, aponte `"imagem"` pro arquivo de vídeo normalmente:
+```json
+{
+  "id": "minha_sala",
+  "imagem": "assets/maps/minha_sala.mp4",
+  ...
+}
+```
+
+O engine vai tentar carregar o vídeo como `<img>` (vai falhar silenciosamente) e o plugin sobrescreve o fundo no `render()` com o frame atual do vídeo. O resultado é animação fluida em loop sem afetar a performance dos outros jogadores.
 
 ### 2. Crie o JSON da sala
 
