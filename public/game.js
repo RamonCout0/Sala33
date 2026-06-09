@@ -54,6 +54,17 @@ let volumeGeral = 0.5;
 const audios = {};
 let audioTocando = null;
 
+function precarregarAudios() {
+    for (const id in AUDIO_PATHS) {
+        if (!audios[id]) {
+            audios[id] = new Audio(AUDIO_PATHS[id]);
+            audios[id].loop = true;
+            audios[id].volume = volumeGeral;
+            audios[id].preload = "auto";
+        }
+    }
+}
+
 function tocarMusica(id) {
     if (!AUDIO_PATHS[id]) return;
     if (!audios[id]) {
@@ -258,7 +269,7 @@ function conectar() {
             lado: meuBicho.lado,
         }));
         legendaTimer = 180;
-        // Notifica a lógica da sala inicial
+        precarregarAudios();
         getLogica()?.onEnter?.(MAPAS[minhaSala]);
         requestAnimationFrame(loop);
     };
