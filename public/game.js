@@ -289,6 +289,12 @@ function appendChatMsg(className, textos) {
 
     chatBox.appendChild(div);
     chatBox.scrollTop = chatBox.scrollHeight;
+    // Sincroniza pro overlay mobile se estiver aberto
+    const overlayBox = document.getElementById("chatOverlayBox");
+    if (overlayBox && document.getElementById("chatOverlay")?.classList.contains("ativo")) {
+        overlayBox.innerHTML = chatBox.innerHTML;
+        overlayBox.scrollTop = overlayBox.scrollHeight;
+    }
 }
 function atualizarPreviewSkin() {
     const selectEl = document.getElementById("spriteSelect");
@@ -362,6 +368,7 @@ function conectar() {
         }));
         legendaTimer = 180;
         precarregarAudios();
+        setupMobileControls();
         getLogica()?.onEnter?.(MAPAS[minhaSala]);
         requestAnimationFrame(loop);
     };
@@ -482,6 +489,73 @@ window.addEventListener("keydown", (e) => {
 });
 window.addEventListener("keyup", (e) => { teclas[e.code] = false; });
 window.addEventListener("blur", () => { teclas = {}; meuBicho.animTick = 0; });
+
+// =====================================================
+//   CONTROLES MOBILE (TOUCH)
+// =====================================================
+function setupMobileControls() {
+    if (!("ontouchstart" in window)) return;
+
+    // Ativa o overlay do d-pad
+    document.getElementById("mobileControls")?.classList.add("ativo");
+
+    // Mapeia botões do d-pad para códigos de tecla
+    const mapeamento = {
+        "btn-up":    "ArrowUp",
+        "btn-down":  "ArrowDown",
+        "btn-left":  "ArrowLeft",
+        "btn-right": "ArrowRight",
+    };
+    for (const [id, code] of Object.entries(mapeamento)) {
+        const btn = document.getElementById(id);
+        if (!btn) continue;
+        btn.addEventListener("touchstart", e => { e.preventDefault(); teclas[code] = true; }, { passive: false });
+        btn.addEventListener("touchend",   e => { e.preventDefault(); teclas[code] = false; }, { passive: false });
+        btn.addEventListener("touchcancel",e => { e.preventDefault(); teclas[code] = false; }, { passive: false });
+    }
+
+    // Botão de interação [E]
+    document.getElementById("btn-interact")?.addEventListener("touchstart", e => {
+        e.preventDefault();
+        if (ws?.readyState === WebSocket.OPEN) {
+            teclas["KeyE"] = true;
+            getLogica()?.onTeclaDown?.("KeyE", ws, meuBicho);
+            setTimeout(() => { teclas["KeyE"] = false; }, 150);
+        }
+    }, { passive: false });
+
+    // Botão de chat — abre overlay
+    document.getElementById("btn-chat-open")?.addEventListener("touchstart", e => {
+        e.preventDefault();
+        abrirChatMobile();
+    }, { passive: false });
+
+    // Input do chat overlay
+    const overlayInput = document.getElementById("chatOverlayInput");
+    if (overlayInput) {
+        overlayInput.addEventListener("keypress", e => {
+            if (e.key === "Enter" && overlayInput.value.trim()) {
+                ws.send(JSON.stringify({ tipo: "chat", texto: traduzirEmotes(overlayInput.value) }));
+                overlayInput.value = "";
+                overlayInput.blur();
+            }
+        });
+    }
+}
+
+function abrirChatMobile() {
+    const overlay = document.getElementById("chatOverlay");
+    if (!overlay) return;
+    overlay.classList.add("ativo");
+    // Sincroniza mensagens do chatBox desktop pro overlay
+    const boxDesktop = document.getElementById("chatBox");
+    const boxMobile  = document.getElementById("chatOverlayBox");
+    if (boxDesktop && boxMobile) boxMobile.innerHTML = boxDesktop.innerHTML;
+    setTimeout(() => document.getElementById("chatOverlayInput")?.focus(), 100);
+}
+window.fecharChatMobile = function() {
+    document.getElementById("chatOverlay")?.classList.remove("ativo");
+};
 
 // =====================================================
 //   FÍSICA
