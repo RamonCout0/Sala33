@@ -168,8 +168,25 @@ async function inicializar() {
 }
 
 // =====================================================
-//   UI HELPERS
+//   SAFE DOM — previne XSS
 // =====================================================
+function appendChatMsg(className, textos) {
+    // textos = [{text, bold?}]
+    const chatBox = document.getElementById("chatBox");
+    const div = document.createElement("div");
+    if (className) div.className = className;
+    for (const t of textos) {
+        if (t.bold) {
+            const strong = document.createElement("strong");
+            strong.textContent = t.text;
+            div.appendChild(strong);
+        } else {
+            div.appendChild(document.createTextNode(t.text));
+        }
+    }
+    chatBox.appendChild(div);
+    chatBox.scrollTop = chatBox.scrollHeight;
+}
 function atualizarPreviewSkin() {
     const selectEl = document.getElementById("spriteSelect");
     if (!selectEl) return;
@@ -225,7 +242,13 @@ function conectar() {
     tocarMusica(SALA_INICIAL);
 
     const proto = location.protocol === "https:" ? "wss:" : "ws:";
-    ws = new WebSocket(proto + "//" + location.host + "/ws");
+    // Produção: mesmo host, path /ws (proxy reverso)
+    // Local: porta 8080 direto
+    const isLocal = location.hostname === "localhost" || location.hostname === "127.0.0.1" || location.hostname.startsWith("192.168.") || location.hostname.startsWith("10.");
+    const wsUrl = isLocal
+        ? "ws://" + location.hostname + ":8080"
+        : proto + "//" + location.host + "/ws";
+    ws = new WebSocket(wsUrl);
 
     ws.onopen = () => {
         ws.send(JSON.stringify({
@@ -242,7 +265,6 @@ function conectar() {
 
     ws.onmessage = (event) => {
         const dados = JSON.parse(event.data);
-        const chatBox = document.getElementById("chatBox");
 
         if (dados.tipo === "erro_login") {
             alert(dados.mensagem);
@@ -259,7 +281,7 @@ function conectar() {
                 dados.animTick = 0; dados.movimentoTimer = 0;
                 outrosJogadores[dados.id] = dados;
             }
-            chatBox.innerHTML += `<div class="sistema">» ${dados.username} entrou.</div>`;
+            appendChatMsg("sistema", [{text: `» ${dados.username} entrou.`}]);
         }
         else if (dados.tipo === "lista_jogadores") {
             dados.jogadores.forEach(p => {
@@ -282,12 +304,12 @@ function conectar() {
         }
         else if (dados.tipo === "jogador_saiu") {
             if (outrosJogadores[dados.id]) {
-                chatBox.innerHTML += `<div class="sistema">« ${outrosJogadores[dados.id].username} saiu.</div>`;
+                appendChatMsg("sistema", [{text: `« ${outrosJogadores[dados.id].username} saiu.`}]);
                 delete outrosJogadores[dados.id];
             }
         }
         else if (dados.tipo === "chat") {
-            chatBox.innerHTML += `<div><strong>[${dados.username}]:</strong> ${dados.texto}</div>`;
+            appendChatMsg("", [{text: `[${dados.username}]: `, bold: true}, {text: dados.texto}]);
             if (dados.username === meuBicho.username) { meuBicho.chatTexto = dados.texto; meuBicho.chatTimer = 240; }
             else {
                 for (const id in outrosJogadores) {
@@ -306,8 +328,6 @@ function conectar() {
             // Repassa para a lógica da sala atual
             getLogica()?.onMensagem?.(dados, ws, meuBicho, tocarMusica, minhaSala);
         }
-
-        chatBox.scrollTop = chatBox.scrollHeight;
     };
 }
 window.conectar = conectar;
