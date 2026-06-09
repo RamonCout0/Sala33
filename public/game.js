@@ -592,10 +592,19 @@ function desenhar() {
     // Legenda do nome da sala (entrada/transição)
     if (legendaTimer > 0) {
         const alpha = Math.min(1, legendaTimer / 30);
+        const nomeSala = salaAtual?.nome || "";
         ctx.save();
         ctx.globalAlpha = alpha;
-        ctx.font = "bold 14px monospace"; ctx.textAlign = "center"; ctx.fillStyle = "#FFFFFF";
-        ctx.fillText(salaAtual?.nome || "", canvas.width / 2, 22);
+        ctx.font = "bold 14px monospace";
+        ctx.textAlign = "center";
+        const lw = ctx.measureText(nomeSala).width;
+        ctx.fillStyle = "#000000";
+        ctx.fillRect(canvas.width / 2 - lw / 2 - 8, 8, lw + 16, 20);
+        ctx.strokeStyle = "#FFFFFF";
+        ctx.lineWidth = 1;
+        ctx.strokeRect(canvas.width / 2 - lw / 2 - 8, 8, lw + 16, 20);
+        ctx.fillStyle = "#FFFFFF";
+        ctx.fillText(nomeSala, canvas.width / 2, 22);
         ctx.restore();
     }
 
