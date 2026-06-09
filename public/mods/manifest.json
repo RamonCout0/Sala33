@@ -6,11 +6,13 @@
     "sala_jogos",
     "museu",
     "floresta",
-    "o_quarto"
+    "o_quarto",
+    "televisao"
   ],
   "logicas": [
     "sala_jogos",
     "museu",
-    "o_quarto"
+    "o_quarto",
+    "televisao"
   ]
 }

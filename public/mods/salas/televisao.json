@@ -1,0 +1,10 @@
+{
+    "id": "televisao",
+    "nome": "1987",
+    "corFundo": "#1a1a1a",
+    "imagem": "assets/maps/televisao.png",
+    "musica": "assets/music/musica_televisao.mp3",
+    "portas": [
+        { "destino": "o_quarto", "x": 0, "y": 142, "w": 15, "h": 50, "spawnX": 215, "spawnY": 250 }
+    ]
+}

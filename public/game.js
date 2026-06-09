@@ -224,7 +224,8 @@ function conectar() {
 
     tocarMusica(SALA_INICIAL);
 
-    ws = new WebSocket("ws://" + window.location.hostname + ":8080");
+    const proto = location.protocol === "https:" ? "wss:" : "ws:";
+    ws = new WebSocket(proto + "//" + location.host + "/ws");
 
     ws.onopen = () => {
         ws.send(JSON.stringify({

@@ -9,7 +9,8 @@
     "aura": "assets/music/musica_aura.mp3"
   },
   "portas": [
-    { "destino": "the_hub", "x": 180, "y": 0, "w": 40, "h": 20, "spawnX": 214, "spawnY": 250 }
+    { "destino": "the_hub", "x": 180, "y": 0, "w": 40, "h": 20, "spawnX": 214, "spawnY": 250 },
+    { "destino": "televisao", "x": 214, "y": 292, "w":40, "h": 20, "spawnX": 51, "spawnY": 163 }
   ],
   "extras": {
     "_comentario": "TV onde rola o duelo de aura. A lógica está em mods/logicas/o_quarto.js (cliente) e server_mods/o_quarto.py (servidor).",
