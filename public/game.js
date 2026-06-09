@@ -169,6 +169,7 @@ async function inicializar() {
         // 5. Imagens
         minhaSala = SALA_INICIAL;
         carregarImagens();
+        inicializarPainelEmojis();
 
         btn.disabled = false;
         btn.textContent = "ENTRAR";
@@ -179,13 +180,94 @@ async function inicializar() {
 }
 
 // =====================================================
+//   RELÓGIO BRT + PAINEL DE EMOJIS
+// =====================================================
+const EMOJIS_PAINEL = [
+    "😊", "😢", "😂", "😅", "😐", "😡",
+    "💀", "🔥", "👑", "🏆", "😎", "🤓",
+    "❤️", "💔", "👍", "👎", "🤝", "✌️",
+    "😱", "🤔", "😴", "👀", "🫡", "😏",
+    "☕", "🌙", "⭐", "🎠", "🎢", "💫",
+];
+
+function horaAtualBrasil() {
+    return new Date().toLocaleTimeString("pt-BR", {
+        timeZone: "America/Sao_Paulo",
+        hour: "2-digit", minute: "2-digit",
+    });
+}
+
+function _aplicarGrayscaleEmojis(el) {
+    if (!el) return;
+    el.querySelectorAll("img.emoji").forEach(img => {
+        img.style.cssText += "; filter: grayscale(100%) brightness(0.8) !important; width: 1em; height: 1em; vertical-align: -0.15em;";
+    });
+}
+
+function inicializarPainelEmojis() {
+    const painel = document.getElementById("emojiPanel");
+    if (!painel) return;
+    const TWEMOJI_BASE = "https://cdn.jsdelivr.net/gh/twitter/twemoji@14.0.2/assets/";
+    EMOJIS_PAINEL.forEach(emoji => {
+        const btn = document.createElement("button");
+        btn.className = "emoji-btn";
+        btn.textContent = emoji;
+        if (window.twemoji) {
+            twemoji.parse(btn, { base: TWEMOJI_BASE, folder: "72x72", ext: ".png" });
+            _aplicarGrayscaleEmojis(btn);
+            btn.querySelectorAll("img.emoji").forEach(img => {
+                img.style.width = "18px";
+                img.style.height = "18px";
+            });
+        }
+        btn.onclick = () => {
+            const input = document.getElementById("chatInput");
+            input.value += emoji;
+            input.focus();
+        };
+        painel.appendChild(btn);
+    });
+    const toggle = document.getElementById("emojiToggle");
+    if (toggle && window.twemoji) {
+        twemoji.parse(toggle, { base: TWEMOJI_BASE, folder: "72x72", ext: ".png" });
+        _aplicarGrayscaleEmojis(toggle);
+        toggle.querySelectorAll("img.emoji").forEach(img => {
+            img.style.width = "20px";
+            img.style.height = "20px";
+        });
+    }
+}
+
+function togglePainelEmoji() {
+    document.getElementById("emojiPanel")?.classList.toggle("aberto");
+}
+window.togglePainelEmoji = togglePainelEmoji;
+
+document.addEventListener("click", (e) => {
+    const container = document.getElementById("emojiBarContainer");
+    if (container && !container.contains(e.target))
+        document.getElementById("emojiPanel")?.classList.remove("aberto");
+});
+
+setInterval(() => {
+    const el = document.getElementById("relogioChat");
+    if (el) el.textContent = "// " + horaAtualBrasil() + " BRT";
+}, 1000);
+
+// =====================================================
 //   SAFE DOM — previne XSS
 // =====================================================
 function appendChatMsg(className, textos) {
-    // textos = [{text, bold?}]
     const chatBox = document.getElementById("chatBox");
     const div = document.createElement("div");
     if (className) div.className = className;
+
+    // Timestamp BRT
+    const hora = document.createElement("span");
+    hora.className = "msg-hora";
+    hora.textContent = horaAtualBrasil();
+    div.appendChild(hora);
+
     for (const t of textos) {
         if (t.bold) {
             const strong = document.createElement("strong");
@@ -195,6 +277,16 @@ function appendChatMsg(className, textos) {
             div.appendChild(document.createTextNode(t.text));
         }
     }
+
+    // Converte emojis em imagens Twemoji (grayscale via CSS)
+    if (window.twemoji) {
+        twemoji.parse(div, {
+            base: "https://cdn.jsdelivr.net/gh/twitter/twemoji@14.0.2/assets/",
+            folder: "72x72", ext: ".png"
+        });
+        _aplicarGrayscaleEmojis(div);
+    }
+
     chatBox.appendChild(div);
     chatBox.scrollTop = chatBox.scrollHeight;
 }
@@ -527,7 +619,10 @@ function desenharBalao(texto, xCentro, yTopo, ellipsis = false) {
     ctx.lineTo(xCentro, yb + ab + 5);
     ctx.closePath();
     ctx.fillStyle = "#FFFFFF"; ctx.fill(); ctx.stroke();
-    ctx.fillStyle = "#000000"; ctx.textAlign = "center"; ctx.fillText(texto, xCentro, yb + 10);
+    ctx.fillStyle = "#000000"; ctx.textAlign = "center";
+    ctx.filter = "grayscale(1)";
+    ctx.fillText(texto, xCentro, yb + 10);
+    ctx.filter = "none";
 }
 
 function desenharReguaDebug() {

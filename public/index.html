@@ -3,6 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <title>SALA 33 - Noir Retro</title>
+    <script src="https://cdn.jsdelivr.net/npm/twemoji@14.0.2/dist/twemoji.min.js" crossorigin="anonymous"></script>
     <style>
         * { box-sizing: border-box; }
         body { 
@@ -82,13 +83,53 @@
             font-size: 13px; line-height: 1.6; color: #bbbbbb;
         }
         
-        #emoteBar { display: flex; gap: 6px; margin-bottom: 6px; width: 100%; }
-        .emote-btn { width: auto; padding: 4px 8px; background: #161616; color: #ffffff; border: 2px solid #444444; font-size: 11px; box-shadow: none; cursor: pointer; }
-        .emote-btn:hover { background: #ffffff; color: #0d0d0d; border-color: #ffffff; }
+
 
         #chatInput { width: 100%; padding: 10px; background: #161616; color: #ffffff; border: 2px solid #444444; font-family: 'Courier New', monospace; outline: none; }
         #chatInput:focus { border-color: #ffffff; }
         .sistema { color: #666666; font-style: italic; }
+
+        /* Relógio BRT */
+        #relogioChat {
+            text-align: right; font-size: 9px; color: #444;
+            margin-bottom: 3px; font-family: 'Courier New', monospace;
+            letter-spacing: 1px;
+        }
+
+        /* Barra de emojis */
+        #emojiBarContainer { position: relative; display: flex; align-items: stretch; gap: 0; margin-top: 5px; }
+        #emojiToggle {
+            width: 38px; height: 38px; padding: 0; flex-shrink: 0;
+            background: #161616; color: #ffffff;
+            border: 2px solid #444444; border-right: none;
+            font-size: 18px; box-shadow: none; cursor: pointer;
+            display: flex; align-items: center; justify-content: center;
+        }
+        #emojiToggle:hover { border-color: #fff; }
+        #emojiBarContainer #chatInput { flex: 1; min-width: 0; width: auto; border-left: none; margin-bottom: 0; }
+        #emojiPanel {
+            display: none; position: absolute; bottom: 110%; left: 0;
+            background: #111; border: 2px solid #333;
+            padding: 8px; z-index: 100;
+            display: none;
+        }
+        #emojiPanel.aberto { display: grid !important; grid-template-columns: repeat(6, 28px); gap: 3px; }
+        .emoji-btn {
+            width: 28px; height: 28px; background: #161616;
+            border: 1px solid #222; cursor: pointer;
+            display: flex; align-items: center; justify-content: center;
+            padding: 0; box-shadow: none; font-size: 16px;
+        }
+        .emoji-btn:hover { border-color: #fff; background: #2a2a2a; }
+        /* Twemoji — grayscale universal */
+        img.emoji {
+            filter: grayscale(100%) brightness(0.8) !important;
+            image-rendering: pixelated;
+        }
+        .emoji-btn img.emoji { width: 18px !important; height: 18px !important; }
+        #chatBox img.emoji { height: 1.1em !important; width: 1.1em !important; vertical-align: -0.15em !important; }
+        #emojiToggle img.emoji { width: 20px !important; height: 20px !important; }
+        .msg-hora { color: #3a3a3a; font-size: 9px; margin-right: 5px; user-select: none; }
     </style>
 </head>
 <body>
@@ -117,19 +158,14 @@
     <div id="gameUI">
         <canvas id="gameCanvas" width="400" height="300"></canvas>
         <div id="chatContainer">
+            <div id="relogioChat"></div>
             <div id="chatBox"></div>
-            
-            <div id="emoteBar">
-                <!-- CORRIGIDO: Agora chamam a função correta enviarEmote -->
-                <button class="emote-btn" onclick="enviarEmote('(•‿•)')"> feliz </button>
-                <button class="emote-btn" onclick="enviarEmote('(╥﹏╥)')"> chorar </button>
-                <button class="emote-btn" onclick="enviarEmote('(❤️)')"> love </button>
-                <button class="emote-btn" onclick="enviarEmote('(o_O)')"> hã? </button>
-                <button class="emote-btn" onclick="enviarEmote('(≧◡≦)')"> rir </button>
-                <button class="emote-btn" onclick="enviarEmote('(━╤┳━)')"> bravo </button>
-            </div>
 
-            <input type="text" id="chatInput" placeholder="Pressione ENTER para falar..." maxlength="200">
+            <div id="emojiBarContainer">
+                <div id="emojiPanel"></div>
+                <button id="emojiToggle" onclick="togglePainelEmoji()">&#128512;</button>
+            </div>
+                        <input type="text" id="chatInput" placeholder="Pressione ENTER para falar..." maxlength="200">
         </div>
     </div>
 
