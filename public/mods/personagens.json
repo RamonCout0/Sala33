@@ -5,5 +5,6 @@
   { "id": "dog",       "nome": "CACHORRO",  "sprite": "assets/characters/dog.png" },
   { "id": "nututu",    "nome": "NUTUTU",    "sprite": "assets/characters/nututu.png" },
   { "id": "portalel",  "nome": "PORTALEL",  "sprite": "assets/characters/portalel.png" },
-  { "id": "iluminus",  "nome": "ILUMINUS",  "sprite": "assets/characters/iluminus.png" }
+  { "id": "iluminus",  "nome": "ILUMINUS",  "sprite": "assets/characters/iluminus.png" },
+  { "id": "tv",        "nome": "TV",         "sprite": "assets/characters/tv.png" }
 ]

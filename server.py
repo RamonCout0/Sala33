@@ -9,6 +9,9 @@ import pkgutil
 from http.server import SimpleHTTPRequestHandler
 from socketserver import ThreadingTCPServer
 
+PORT_WS   = int(os.environ.get("PORT", 8080))
+PORT_HTTP = int(os.environ.get("PORT_HTTP", 8000))
+
 
 # =====================================================
 #   CONFIGURAÇÃO — Lê o manifest para saber quais salas existem
@@ -287,7 +290,7 @@ def rodar_servidor_web_background():
             pass  # ignora broken pipe
 
     try:
-        with ServidorSilenciosoMultithread(("", 8000), HandlerCustomizado) as httpd:
+        with ServidorSilenciosoMultithread(("", PORT_HTTP), HandlerCustomizado) as httpd:
             httpd.serve_forever()
     except Exception:
         pass
@@ -316,7 +319,7 @@ async def main():
     asyncio.create_task(loop_minigames())
     threading.Thread(target=rodar_servidor_web_background, daemon=True).start()
 
-    async with websockets.serve(handler, "0.0.0.0", 8080):
+    async with websockets.serve(handler, "0.0.0.0", PORT_WS):
         await asyncio.Future()
 
 
