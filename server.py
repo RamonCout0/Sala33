@@ -12,6 +12,8 @@ import mimetypes
 import http
 from http.server import SimpleHTTPRequestHandler
 from socketserver import ThreadingTCPServer
+from websockets.http11 import Response
+from websockets.datastructures import Headers as WsHeaders
 
 # Modo produção = qualquer cloud que define PORT (Railway, Render, Fly.io...)
 # Modo local = duas portas separadas (HTTP 8000 + WS 8080)
@@ -429,38 +431,37 @@ SEM_CACHE = {".js", ".json"}
 
 async def process_request(connection, request):
     """Serve arquivos estáticos quando a requisição não é upgrade de WS."""
-    # Deixa o websockets cuidar do handshake WS normalmente
     if request.headers.get("Upgrade", "").lower() == "websocket":
         return None
 
-    # Resolve o caminho
     url_path = request.path.split("?")[0]
     if url_path == "/":
         url_path = "/index.html"
     file_path = os.path.realpath(os.path.join(PUBLIC_DIR, url_path.lstrip("/")))
 
-    # Bloqueia path traversal
     if not file_path.startswith(os.path.realpath(PUBLIC_DIR)):
-        return http.HTTPStatus.FORBIDDEN, [], b"Forbidden"
+        body = b"Forbidden"
+        return Response(403, "Forbidden", WsHeaders([("Content-Length", str(len(body)))]), body)
 
     if not os.path.isfile(file_path):
-        return http.HTTPStatus.NOT_FOUND, [], b"Not Found"
+        body = b"Not Found"
+        return Response(404, "Not Found", WsHeaders([("Content-Length", str(len(body)))]), body)
 
     with open(file_path, "rb") as f:
         body = f.read()
 
     ext = os.path.splitext(file_path)[1].lower()
     ct = CONTENT_TYPES.get(ext, "application/octet-stream")
-    headers = [
+    header_list = [
         ("Content-Type", ct),
         ("Content-Length", str(len(body))),
         ("X-Content-Type-Options", "nosniff"),
         ("X-Frame-Options", "DENY"),
     ]
     if ext in SEM_CACHE:
-        headers.append(("Cache-Control", "no-cache, no-store, must-revalidate"))
+        header_list.append(("Cache-Control", "no-cache, no-store, must-revalidate"))
 
-    return http.HTTPStatus.OK, headers, body
+    return Response(200, "OK", WsHeaders(header_list), body)
 
 
 def rodar_servidor_web_background():
