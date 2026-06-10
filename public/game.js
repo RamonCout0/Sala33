@@ -55,6 +55,8 @@ const audios = {};
 let audioTocando = null;
 
 function precarregarAudios() {
+    // No mobile não faz preload — evita lag e throttling do browser
+    if ("ontouchstart" in window) return;
     for (const id in AUDIO_PATHS) {
         if (!audios[id]) {
             audios[id] = new Audio(AUDIO_PATHS[id]);
@@ -64,6 +66,13 @@ function precarregarAudios() {
         }
     }
 }
+
+// Retoma música quando o usuário volta à aba (mobile pausa áudio em background)
+document.addEventListener("visibilitychange", () => {
+    if (!document.hidden && audioTocando) {
+        audioTocando.play().catch(() => {});
+    }
+});
 
 function tocarMusica(id) {
     if (!AUDIO_PATHS[id]) return;

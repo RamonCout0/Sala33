@@ -200,37 +200,42 @@
         .action-btn:active { background: rgba(255,255,255,0.25); border-color: #fff; }
         #btn-chat-open { font-size: 18px; }
 
-        /* Overlay do chat no mobile */
+        /* Chat overlay mobile — bottom sheet compacto */
         #chatOverlay {
             display: none;
             position: fixed;
             bottom: 0; left: 0; right: 0;
+            max-height: 42vh;
             background: #111;
-            border-top: 2px solid #444;
-            z-index: 100;
-            padding: 8px;
+            border-top: 2px solid #555;
+            z-index: 200;
+            padding: 6px 8px 8px;
             flex-direction: column;
-            gap: 6px;
+            gap: 5px;
+            box-shadow: 0 -4px 20px rgba(0,0,0,0.7);
         }
         #chatOverlay.ativo { display: flex; }
+        #chatOverlayHeader {
+            display: flex; justify-content: space-between; align-items: center;
+            padding-bottom: 4px; border-bottom: 1px solid #333;
+        }
+        #chatOverlayTitle { font-size: 9px; color: #555; letter-spacing: 2px; font-family: monospace; }
         #chatOverlayBox {
-            height: 120px; overflow-y: auto;
-            background: #161616; border: 1px solid #333;
-            padding: 8px; font-size: 12px; color: #bbb;
-            line-height: 1.6;
+            flex: 1; overflow-y: auto; min-height: 80px; max-height: 18vh;
+            background: #161616; border: 1px solid #2a2a2a;
+            padding: 6px 8px; font-size: 11px; color: #bbb; line-height: 1.6;
         }
         #chatOverlayInput {
-            width: 100%; padding: 10px;
-            background: #222; color: #fff;
+            width: 100%; padding: 8px 10px;
+            background: #1a1a1a; color: #fff;
             border: 2px solid #444; font-family: 'Courier New', monospace;
-            font-size: 14px; outline: none;
+            font-size: 13px; outline: none; border-radius: 0;
         }
         #chatOverlayInput:focus { border-color: #fff; }
         #chatOverlayClose {
-            align-self: flex-end;
-            width: auto; padding: 6px 12px;
-            background: #161616; color: #fff;
-            border: 1px solid #444; font-size: 10px;
+            width: auto; padding: 3px 10px;
+            background: transparent; color: #555;
+            border: 1px solid #333; font-size: 10px;
             font-family: 'Courier New', monospace;
             cursor: pointer; box-shadow: none;
         }
@@ -248,7 +253,7 @@
             }
             #gameUI { width: 100%; align-items: center; }
             #chatContainer { display: none !important; }
-            footer { display: none !important; }
+            footer, [style*='position: fixed'][style*='right'] { display: none !important; }
             #configMenu { display: none !important; }
         }
     </style>
@@ -294,9 +299,12 @@
         </div>
         <!-- Chat overlay mobile -->
         <div id="chatOverlay">
-            <button id="chatOverlayClose" onclick="fecharChatMobile()">&#10005; FECHAR</button>
+            <div id="chatOverlayHeader">
+                <span id="chatOverlayTitle">// CHAT</span>
+                <button id="chatOverlayClose" onclick="fecharChatMobile()">&#10005;</button>
+            </div>
             <div id="chatOverlayBox"></div>
-            <input type="text" id="chatOverlayInput" placeholder="Mensagem..." maxlength="200">
+            <input type="text" id="chatOverlayInput" placeholder="Pressione ENTER para enviar..." maxlength="200">
         </div>
         <div id="chatContainer">
             <div id="relogioChat"></div>
