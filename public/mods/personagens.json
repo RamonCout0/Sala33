@@ -6,5 +6,6 @@
   { "id": "nututu",    "nome": "NUTUTU",    "sprite": "assets/characters/nututu.png" },
   { "id": "portalel",  "nome": "PORTALEL",  "sprite": "assets/characters/portalel.png" },
   { "id": "iluminus",  "nome": "ILUMINUS",  "sprite": "assets/characters/iluminus.png" },
-  { "id": "tv",        "nome": "TV",         "sprite": "assets/characters/tv.png" }
+  { "id": "tv",        "nome": "TV",         "sprite": "assets/characters/tv.png" },
+  { "id": "mommy",     "nome": "MOMMY",      "sprite": "assets/characters/mommy.png" }
 ]
