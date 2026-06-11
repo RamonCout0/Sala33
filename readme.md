@@ -1,5 +1,6 @@
 # 🕹️ SALA 33
 
+<img src="page.png" alt="sala33">
 Ambiente multiplayer em tempo real desenvolvido como projeto da disciplina de **Sistemas Distribuídos**. Inspirado em RPGs retrô e mundos virtuais como o Club Penguin, o projeto simula um pequeno mundo com salas interconectadas, chat, personagens e minigames — tudo sincronizado via WebSockets.
 
 O projeto é **open-source** e foi construído para ser fácil de expandir: qualquer pessoa pode criar novas salas, personagens, músicas e mecânicas sem tocar no engine principal.
