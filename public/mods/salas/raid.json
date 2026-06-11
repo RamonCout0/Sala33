@@ -1,0 +1,22 @@
+{
+    "id": "raid",
+    "nome":"RAID DO DRAGÃO",
+    "corFundo":"#0d0d1a",
+    "imagem":"assets/maps/covil.png",
+    "musica": "assets/music/musica_raid.mp3",
+    "portas":[
+        {"destino": "o_quarto", "x": 1, "y": 133, "w":5, "h":20, "spawnX": 275, "spawnY":51}
+    ],
+    "extras":{
+        "boss": { "x": 200, "y": 50 },
+        "spawnSeguro": {"x":275, "y": 210},
+        "zonaSegura": {"x": 5, "y": 100, "w":56, "h":110},
+        "sprites":{
+            "idle": "assets/bosses/dragao_idle.png",
+            "carregando": "assets/bosses/dragao_carregando.png",
+            "ataque": "assets/bosses/dragao_ataque.png"
+        },
+         "tempoCarregando": 4,
+         "tempoIdle": 3
+    }
+}

@@ -402,3 +402,50 @@ git merge upstream/main
 ---
 
 Dúvidas? Olhe `server_mods/sala_jogos.py` e `mods/logicas/sala_jogos.js` — são os exemplos mais completos.
+
+---
+
+## 🛣️ Roadmap — Arquitetura Futura
+
+O projeto atual usa Python no servidor e JavaScript puro no cliente. Isso funciona bem pra comunidades pequenas, mas existe um caminho natural de evolução caso o projeto cresça.
+
+### Microsserviços por sala
+
+A ideia é que cada `server_mod` possa rodar como um serviço independente em **qualquer linguagem**, se comunicando com o core via WebSocket:
+
+```
+┌─────────────────────────────────────────┐
+│           CORE (Python)                 │
+│  - Gerencia salas e jogadores           │
+│  - Roteamento de mensagens              │
+└────────┬───────────────┬───────────────┘
+         │               │
+         ▼               ▼
+┌──────────────┐  ┌──────────────┐
+│ MOD SERVICE  │  │ MOD SERVICE  │
+│  (Rust/Go)   │  │  (Node.js)   │
+│  Física 60fps│  │  Minigame    │
+└──────────────┘  └──────────────┘
+```
+
+O protocolo de comunicação seria JSON via WebSocket, com uma interface padronizada:
+
+```json
+// Core → Mod
+{ "tipo": "evento", "jogador_id": 123, "sala": "minha_sala", "dados": {} }
+
+// Mod → Core
+{ "tipo": "broadcast", "sala": "minha_sala", "payload": {} }
+```
+
+Isso permitiria mods escritos em **Rust, Go, C#, Node.js, Lua** ou qualquer linguagem que abra um WebSocket.
+
+### Quando isso faz sentido
+
+A arquitetura atual aguenta bem pra comunidades pequenas. A migração pro modelo de microsserviços faz sentido quando:
+
+- Uma sala tem física complexa que sobrecarrega o Python
+- O servidor ultrapassa 200 jogadores simultâneos
+- Um contribuidor quer implementar algo que Python não entrega com a performance necessária
+
+A migração seria incremental — um `server_mod` por vez, sem precisar reescrever o core.

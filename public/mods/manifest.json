@@ -7,12 +7,14 @@
     "museu",
     "floresta",
     "o_quarto",
-    "televisao"
+    "televisao",
+    "raid"
   ],
   "logicas": [
     "sala_jogos",
     "museu",
     "o_quarto",
-    "televisao"
+    "televisao",
+    "raid"
   ]
 }
