@@ -19,6 +19,7 @@ const ctx = canvas.getContext("2d");
 let ws;
 
 let minhaSala = "";
+let meuSid = null;  // session id enviado pelo servidor
 let meuBicho = {
     username: "", x: 200, y: 150, velocidade: 2, tamanho: 32,
     chatTexto: "", chatTimer: 0, isTyping: false,
@@ -38,6 +39,98 @@ const intervaloFps = 1000 / 60;
 let mostrarDebug = false;
 let tremorTela = 0;
 let mouseX = 0, mouseY = 0;
+
+// Debug log (eventos de sistema — só visíveis via F2)
+const debugLog = [];
+const DEBUG_LOG_MAX = 60;
+
+function registrarDebug(categoria, mensagem, meta) {
+    debugLog.push({ categoria, mensagem, meta: meta || {}, ts: horaAtualBrasil() });
+    if (debugLog.length > DEBUG_LOG_MAX) debugLog.shift();
+}
+
+// =====================================================
+//   WASM — Physics Engine
+//   Carrega public/wasm/physics.wasm e expõe:
+//     Wasm.update_particles(ptr, count, dt)
+//     Wasm.lerp_positions(src, dst, out, n, t)
+//     Wasm.check_rect_overlap(...)
+//     Wasm.snow_update(ptr, count, speed_mult, w, h)
+// =====================================================
+const Wasm = {
+    ready: false,
+    _inst: null,
+    _mem: null,
+    // Buffers alocados dentro da memória do módulo
+    _ptrs: {},
+
+    async init() {
+        try {
+            const res = await fetch('wasm/physics.wasm');
+            const buf = await res.arrayBuffer();
+            const { instance } = await WebAssembly.instantiate(buf, {
+                env: { memory: new WebAssembly.Memory({ initial: 4 }) }
+            });
+            this._inst = instance.exports;
+            this._mem  = instance.exports.memory;
+            this.ready = true;
+            console.log('[WASM] physics.wasm carregado ✓');
+        } catch (e) {
+            console.warn('[WASM] Não foi possível carregar physics.wasm, usando fallback JS:', e.message);
+        }
+    },
+
+    _alloc(floats) {
+        // Retorna um ponteiro pra um bloco de floats na memória do WASM
+        // Simplificado: usa o heap base do módulo
+        return 0; // será expandido quando necessário
+    },
+
+    // Chama update_particles no WASM ou faz fallback JS
+    updateParticles(arr, dt) {
+        if (!this.ready || arr.length === 0) return arr;
+        // Cria Float32Array view na memória do WASM
+        const count = arr.length;
+        const mem   = new Float32Array(this._mem.buffer, 0, count * 8);
+        for (let i = 0; i < count; i++) {
+            const p = arr[i], base = i * 8;
+            mem[base]   = p.x;    mem[base+1] = p.y;
+            mem[base+2] = p.vx;   mem[base+3] = p.vy;
+            mem[base+4] = p.vida; mem[base+5] = p.decay;
+            mem[base+6] = p.tam;
+            // flags: bit0=ativo, bit1=tem_gravidade, bit2=tem_drift
+            let flags = 1; // sempre ativo
+            if (p.gravidade) flags |= 2;
+            if (p.drift)     flags |= 4;
+            mem[base+7] = flags;
+        }
+        this._inst.update_particles(0, count, dt);
+        // Lê de volta
+        for (let i = 0; i < count; i++) {
+            const p = arr[i], base = i * 8;
+            p.x    = mem[base];   p.y    = mem[base+1];
+            p.vx   = mem[base+2]; p.vy   = mem[base+3];
+            p.vida = mem[base+4]; p.tam  = mem[base+6];
+        }
+        return arr.filter(p => p.vida > 0);
+    },
+
+    // Colisão rect-rect (WASM ou fallback)
+    checkRectOverlap(ax, ay, aw, ah, bx, by, bw, bh) {
+        if (this.ready) {
+            return this._inst.check_rect_overlap(ax,ay,aw,ah,bx,by,bw,bh) === 1;
+        }
+        return ax < bx+bw && ax+aw > bx && ay < by+bh && ay+ah > by;
+    },
+
+    // Ponto em rect (WASM ou fallback)
+    checkPointInRect(px, py, rx, ry, rw, rh) {
+        if (this.ready) {
+            return this._inst.check_point_in_rect(px,py,rx,ry,rw,rh) === 1;
+        }
+        return px >= rx && px <= rx+rw && py >= ry && py <= ry+rh;
+    },
+};
 
 // =====================================================
 //   CONFIG DINÂMICA (carregada de JSON)
@@ -175,10 +268,11 @@ async function inicializar() {
             })));
         }
 
-        // 5. Imagens
+        // 5. Imagens + WASM
         minhaSala = SALA_INICIAL;
         carregarImagens();
         inicializarPainelEmojis();
+        Wasm.init(); // async, sem bloquear — fallback JS ativo enquanto carrega
 
         btn.disabled = false;
         btn.textContent = "ENTRAR";
@@ -394,17 +488,20 @@ function conectar() {
         }
 
         if (dados.tipo === "novo_jogador") {
-            if (dados.username !== meuBicho.username) {
+            if (dados.id !== meuSid) {
                 dados.chatTexto = ""; dados.chatTimer = 0; dados.isTyping = false;
                 dados.lado = dados.lado || "direita";
                 dados.animTick = 0; dados.movimentoTimer = 0;
                 outrosJogadores[dados.id] = dados;
             }
-            appendChatMsg("sistema", [{text: `» ${dados.username} entrou.`}]);
+            // Evento de sistema — só no debug mode (não polui o chat)
+            registrarDebug("join", `» ${dados.username} entrou.`);
         }
         else if (dados.tipo === "lista_jogadores") {
+            // O servidor envia nosso próprio sid na primeira lista
+            if (dados.meu_sid) meuSid = dados.meu_sid;
             dados.jogadores.forEach(p => {
-                if (p.username !== meuBicho.username) {
+                if (p.id !== meuSid) {
                     p.chatTexto = ""; p.chatTimer = 0; p.isTyping = false;
                     p.lado = p.lado || "direita";
                     p.animTick = 0; p.movimentoTimer = 0;
@@ -423,9 +520,12 @@ function conectar() {
         }
         else if (dados.tipo === "jogador_saiu") {
             if (outrosJogadores[dados.id]) {
-                appendChatMsg("sistema", [{text: `« ${outrosJogadores[dados.id].username} saiu.`}]);
+                registrarDebug("leave", `« ${outrosJogadores[dados.id].username} saiu.`);
                 delete outrosJogadores[dados.id];
             }
+        }
+        else if (dados.tipo === "debug_event") {
+            registrarDebug(dados.categoria || "info", dados.mensagem || "", dados.meta);
         }
         else if (dados.tipo === "chat") {
             appendChatMsg("", [{text: `[${dados.username}]: `, bold: true}, {text: dados.texto}]);
@@ -479,18 +579,39 @@ canvas.addEventListener("mousemove", (e) => {
 });
 
 window.addEventListener("keydown", (e) => {
+    // Enter pra focar no chat quando não está digitando
+    if (e.code === "Enter" && document.activeElement !== chatInput) {
+        e.preventDefault();
+        chatInput.focus();
+        return;
+    }
     if (document.activeElement === chatInput) return;
     teclas[e.code] = true;
 
+    // Hotkeys globais
     if (e.code === "F2") { e.preventDefault(); mostrarDebug = !mostrarDebug; return; }
     if (e.code === "F1") {
         e.preventDefault();
         const cm = document.getElementById("configMenu");
-        cm.style.display = (cm.style.display === "none" || !cm.style.display) ? "block" : "none";
+        if (cm) cm.style.display = (cm.style.display === "none" || !cm.style.display) ? "block" : "none";
         return;
     }
 
-    // Repassa para a lógica da sala
+    // Q universal — fecha overlays, sai de minigames
+    if (e.code === "KeyQ") {
+        const painel = document.getElementById("emojiPanel");
+        if (painel?.classList.contains("aberto")) {
+            painel.classList.remove("aberto");
+            e.preventDefault(); return;
+        }
+        const overlay = document.getElementById("chatOverlay");
+        if (overlay?.classList.contains("ativo")) {
+            window.fecharChatMobile?.();
+            e.preventDefault(); return;
+        }
+        // Se não fechou nada, passa pra lógica da sala (Pong/Aura/etc)
+    }
+
     if (ws?.readyState === WebSocket.OPEN) {
         const consumido = getLogica()?.onTeclaDown?.(e.code, ws, meuBicho);
         if (consumido) e.preventDefault();
@@ -599,10 +720,12 @@ function atualizarFisica() {
         meuBicho.x = Math.max(0, Math.min(canvas.width - meuBicho.tamanho, meuBicho.x));
         meuBicho.y = Math.max(0, Math.min(canvas.height - meuBicho.tamanho, meuBicho.y));
 
-        // Verifica portas
+        // Verifica portas (usa WASM se disponível)
         for (const porta of (MAPAS[minhaSala]?.portas || [])) {
-            if (meuBicho.x < porta.x + porta.w && meuBicho.x + meuBicho.tamanho > porta.x &&
-                meuBicho.y < porta.y + porta.h && meuBicho.y + meuBicho.tamanho > porta.y) {
+            if (Wasm.checkRectOverlap(
+                meuBicho.x, meuBicho.y, meuBicho.tamanho, meuBicho.tamanho,
+                porta.x, porta.y, porta.w, porta.h
+            )) {
                 if (ws?.readyState === WebSocket.OPEN) {
                     ws.send(JSON.stringify({ tipo: "digitando", estado: false }));
                 }
@@ -745,6 +868,49 @@ function desenharReguaDebug() {
     ctx.restore();
 }
 
+function _desenharDebugOverlay() {
+    const X = 8, Y = 30, W = 200, H = 230;
+    ctx.save();
+    ctx.fillStyle = "rgba(0,0,0,0.88)";
+    ctx.fillRect(X, Y, W, H);
+    ctx.strokeStyle = "#00ff66"; ctx.lineWidth = 1;
+    ctx.strokeRect(X, Y, W, H);
+
+    ctx.fillStyle = "#00ff66"; ctx.font = "bold 9px monospace"; ctx.textAlign = "left";
+    ctx.fillText("[F2] DEBUG MODE", X+6, Y+12);
+
+    const online = Object.keys(outrosJogadores).length + 1;
+    const stats = [
+        `sala:    ${minhaSala}`,
+        `pos:     ${Math.floor(meuBicho.x)}, ${Math.floor(meuBicho.y)}`,
+        `online:  ${online}`,
+        `ws:      ${ws?.readyState === WebSocket.OPEN ? 'OK' : 'OFF'}`,
+        `wasm:    ${Wasm.ready ? 'ON' : 'fallback JS'}`,
+        `mouse:   ${mouseX}, ${mouseY}`,
+    ];
+    ctx.font = "8px monospace"; ctx.fillStyle = "#aaeeaa";
+    stats.forEach((s, i) => ctx.fillText(s, X+6, Y+28+i*11));
+
+    ctx.strokeStyle = "rgba(0,255,100,0.3)";
+    ctx.beginPath(); ctx.moveTo(X+4, Y+100); ctx.lineTo(X+W-4, Y+100); ctx.stroke();
+    ctx.fillStyle = "#00ff66"; ctx.font = "8px monospace";
+    ctx.fillText("─ EVENTOS ─", X+6, Y+112);
+
+    const linhas = Math.min(debugLog.length, 12);
+    const start  = debugLog.length - linhas;
+    for (let i = 0; i < linhas; i++) {
+        const ev = debugLog[start + i];
+        const cor = ev.categoria === "join"  ? "#88ff88"
+                  : ev.categoria === "leave" ? "#ff8888"
+                  : ev.categoria === "error" ? "#ff5555" : "#cccccc";
+        ctx.fillStyle = cor;
+        let txt = `${ev.ts.slice(0,5)} ${ev.mensagem}`;
+        if (txt.length > 30) txt = txt.slice(0, 28) + "…";
+        ctx.fillText(txt, X+6, Y+124+i*9);
+    }
+    ctx.restore();
+}
+
 // =====================================================
 //   RENDERIZAÇÃO — frame
 // =====================================================
@@ -825,7 +991,10 @@ function desenhar() {
         console.error(`[render:${minhaSala}]`, e);
     }
 
-    if (mostrarDebug) desenharReguaDebug();
+    if (mostrarDebug) {
+        desenharReguaDebug();
+        _desenharDebugOverlay();
+    }
 
     if (transicaoAlpha > 0) {
         ctx.fillStyle = `rgba(0,0,0,${transicaoAlpha})`;
