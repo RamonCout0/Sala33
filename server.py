@@ -696,14 +696,16 @@ def _ip_local():
 #   MAIN
 # ──────────────────────────────────────────────────────────────
 async def main():
-    # Banco de dados
+    global DB_DISPONIVEL
+
+    # Banco de dados — testa conexão antes de confirmar
     if DB_DISPONIVEL:
         try:
             await _db.init_db()
             asyncio.create_task(_db._log_writer())
         except Exception as e:
-            print(f"[db] AVISO: não foi possível conectar ao PostgreSQL: {e}")
-            print("[db] Rodando sem banco de dados.")
+            print(f"[db] PostgreSQL indisponível: {e}")
+            DB_DISPONIVEL = False  # desativa pra não tentar mais
 
     hub = RoomHub(MANIFEST.get("salas", []))
     carregar_server_mods()

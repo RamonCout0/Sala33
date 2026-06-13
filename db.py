@@ -215,7 +215,12 @@ _log_queue: asyncio.Queue = asyncio.Queue(maxsize=1000)
 
 async def _log_writer():
     """Worker assíncrono que drena a fila de logs pra o banco."""
-    pool = await get_pool()
+    try:
+        pool = await get_pool()
+    except Exception as e:
+        print(f"[log_writer] sem pool: {e}")
+        return   # encerra a task silenciosamente
+
     batch = []
     while True:
         try:
