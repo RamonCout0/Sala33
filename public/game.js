@@ -454,12 +454,13 @@ function conectar() {
     tocarMusica(SALA_INICIAL);
 
     const proto = location.protocol === "https:" ? "wss:" : "ws:";
-    // Produção: mesmo host, path /ws (proxy reverso)
+    const isLocal = location.hostname === "localhost" || location.hostname === "127.0.0.1"
+        || location.hostname.startsWith("192.168.") || location.hostname.startsWith("10.");
+    // Produção: conecta na raiz (servidor aceita WS em qualquer path)
     // Local: porta 8080 direto
-    const isLocal = location.hostname === "localhost" || location.hostname === "127.0.0.1" || location.hostname.startsWith("192.168.") || location.hostname.startsWith("10.");
     const wsUrl = isLocal
-        ? "ws://" + location.hostname + ":8080"
-        : proto + "//" + location.host + "/ws";
+        ? `ws://${location.hostname}:8080`
+        : `${proto}//${location.host}`;  // raiz, sem /ws
     ws = new WebSocket(wsUrl);
 
     ws.onopen = () => {
