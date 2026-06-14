@@ -298,6 +298,116 @@
         }
         input[type="password"]:focus { border-color: #ffffff; }
 
+        /* ===== PAINEL SOCIAL ===== */
+        #btnSocialToggle {
+            position: fixed;
+            top: 12px; right: 12px;
+            width: auto; padding: 8px 14px;
+            background: #161616; color: #fff;
+            border: 2px solid #555;
+            font-family: 'Courier New', monospace;
+            font-size: 11px; font-weight: bold; letter-spacing: 2px;
+            cursor: pointer; box-shadow: 3px 3px 0 #000;
+            z-index: 150;
+        }
+        #btnSocialToggle:hover { border-color: #fff; background: #222; }
+
+        #socialPanel {
+            display: none;
+            position: fixed;
+            top: 0; right: 0;
+            width: 280px; max-width: 85vw; height: 100vh;
+            background: #0f0f0f;
+            border-left: 2px solid #555;
+            z-index: 250;
+            padding: 16px;
+            overflow-y: auto;
+            box-shadow: -6px 0 24px rgba(0,0,0,0.8);
+        }
+        #socialPanel.aberto { display: block; }
+
+        #socialHeader {
+            display: flex; justify-content: space-between; align-items: center;
+            border-bottom: 1px solid #333; padding-bottom: 10px; margin-bottom: 14px;
+            font-size: 12px; letter-spacing: 3px; color: #fff;
+        }
+        .social-close {
+            width: auto; padding: 2px 8px;
+            background: transparent; color: #666;
+            border: 1px solid #333; font-size: 11px;
+            box-shadow: none; cursor: pointer;
+        }
+        .social-close:hover { color: #ff6666; border-color: #ff6666; }
+
+        .social-secao { margin-bottom: 18px; }
+        .social-titulo {
+            font-size: 9px; letter-spacing: 2px; color: #666;
+            margin-bottom: 8px; text-transform: uppercase;
+        }
+        #btnFavSala {
+            width: 100%; padding: 10px;
+            background: #1a1a1a; color: #ffd24a;
+            border: 2px solid #4a3d1a;
+            font-family: 'Courier New', monospace; font-size: 11px;
+            letter-spacing: 1px; cursor: pointer; box-shadow: none;
+        }
+        #btnFavSala:hover { border-color: #ffd24a; }
+        #btnFavSala.ativo { background: #2a2410; color: #ffd24a; border-color: #ffd24a; }
+
+        .social-add-row { display: flex; gap: 6px; }
+        .social-add-row input {
+            flex: 1; margin-bottom: 0; padding: 8px;
+            background: #1a1a1a; color: #fff;
+            border: 2px solid #444; text-align: left;
+            font-family: 'Courier New', monospace; font-size: 12px;
+        }
+        .social-add-row input:focus { border-color: #fff; outline: none; }
+        .social-add-row button {
+            width: 40px; padding: 0; font-size: 18px;
+            background: #fff; color: #000; border: none;
+            cursor: pointer; box-shadow: 2px 2px 0 #000;
+        }
+
+        #socialMsg {
+            font-size: 9px; letter-spacing: 1px; margin-top: 6px;
+            min-height: 12px;
+        }
+        #socialMsg.erro { color: #ff6666; }
+        #socialMsg.ok   { color: #66ff88; }
+
+        .amigo-item, .fav-item {
+            display: flex; justify-content: space-between; align-items: center;
+            padding: 8px 10px; margin-bottom: 5px;
+            background: #161616; border: 1px solid #2a2a2a;
+            font-size: 11px; color: #ccc; letter-spacing: 1px;
+        }
+        .amigo-item .nome, .fav-item .nome {
+            display: flex; align-items: center; gap: 8px;
+        }
+        .amigo-online {
+            width: 7px; height: 7px; border-radius: 50%;
+            background: #44dd66; display: inline-block;
+            box-shadow: 0 0 4px #44dd66;
+        }
+        .amigo-offline {
+            width: 7px; height: 7px; border-radius: 50%;
+            background: #444; display: inline-block;
+        }
+        .social-btn-acao {
+            width: auto; padding: 3px 8px;
+            background: transparent; color: #666;
+            border: 1px solid #333; font-size: 10px;
+            box-shadow: none; cursor: pointer;
+            font-family: 'Courier New', monospace;
+        }
+        .social-btn-acao:hover { color: #fff; border-color: #fff; }
+        .social-btn-acao.remove:hover { color: #ff6666; border-color: #ff6666; }
+        .social-vazio { font-size: 10px; color: #444; font-style: italic; padding: 6px 0; }
+
+        @media (max-width: 850px) {
+            #btnSocialToggle { top: 6px; right: 6px; padding: 6px 10px; font-size: 9px; }
+        }
+
     </style>
 </head>
 <body>
@@ -374,6 +484,46 @@
                 <button id="emojiToggle" onclick="togglePainelEmoji()">&#128512;</button>
             </div>
                         <input type="text" id="chatInput" placeholder="Pressione ENTER para falar..." maxlength="200">
+        </div>
+    </div>
+
+    <!-- ===== PAINEL SOCIAL (amigos + favoritar sala) ===== -->
+    <!-- Só aparece quando logado com conta. Toggle pelo botão [A]. -->
+    <button id="btnSocialToggle" onclick="toggleSocial()" style="display:none;">
+        ★ AMIGOS
+    </button>
+
+    <div id="socialPanel">
+        <div id="socialHeader">
+            <span>// SOCIAL</span>
+            <button onclick="toggleSocial()" class="social-close">&#10005;</button>
+        </div>
+
+        <!-- Favoritar sala atual -->
+        <div class="social-secao">
+            <button id="btnFavSala" onclick="toggleFavoritoSalaAtual()">☆ FAVORITAR ESTA SALA</button>
+        </div>
+
+        <!-- Adicionar amigo -->
+        <div class="social-secao">
+            <div class="social-titulo">ADICIONAR AMIGO</div>
+            <div class="social-add-row">
+                <input type="text" id="inputAddAmigo" placeholder="USERNAME" maxlength="16">
+                <button onclick="adicionarAmigo()">+</button>
+            </div>
+            <div id="socialMsg"></div>
+        </div>
+
+        <!-- Lista de amigos -->
+        <div class="social-secao">
+            <div class="social-titulo">MEUS AMIGOS (<span id="amigosCount">0</span>)</div>
+            <div id="listaAmigos"></div>
+        </div>
+
+        <!-- Salas favoritas -->
+        <div class="social-secao">
+            <div class="social-titulo">SALAS FAVORITAS</div>
+            <div id="listaFavoritos"></div>
         </div>
     </div>
 

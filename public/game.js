@@ -36,6 +36,12 @@ let legendaTimer = 0;
 let tempoAnterior = 0;
 const intervaloFps = 1000 / 60;
 
+// Throttle de envio de movimento: manda no máximo ~15x/s (a cada ~66ms)
+// em vez de 60x/s. Evita floodar o rate limiter do servidor (causa dos "TPs").
+let ultimoEnvioMov = 0;
+const INTERVALO_MOV_MS = 66;
+let movPendente = false;   // há posição nova não enviada?
+
 let mostrarDebug = false;
 let tremorTela = 0;
 let mouseX = 0, mouseY = 0;
@@ -545,6 +551,142 @@ function autenticarOuCriar(tipo) {
 window.autenticarOuCriar = autenticarOuCriar;
 
 // =====================================================
+//   PAINEL SOCIAL (amigos + favoritos)
+// =====================================================
+let contaAtiva = false;            // logado com conta?
+let meusAmigos = [];               // [{id, username, sprite_id}]
+let meusFavoritos = [];            // ["the_hub", ...]
+
+function toggleSocial() {
+    const painel = document.getElementById("socialPanel");
+    if (!painel) return;
+    painel.classList.toggle("aberto");
+    if (painel.classList.contains("aberto")) {
+        // Pede lista atualizada ao abrir
+        if (ws?.readyState === WebSocket.OPEN && contaAtiva) {
+            ws.send(JSON.stringify({ tipo: "listar_amigos" }));
+        }
+        renderizarSocial();
+    }
+}
+window.toggleSocial = toggleSocial;
+
+function _socialMsg(texto, tipo) {
+    const el = document.getElementById("socialMsg");
+    if (!el) return;
+    el.textContent = texto;
+    el.className = tipo || "";
+    if (texto) setTimeout(() => { el.textContent = ""; el.className = ""; }, 4000);
+}
+
+function adicionarAmigo() {
+    const input = document.getElementById("inputAddAmigo");
+    const nome = input.value.trim().toUpperCase();
+    if (!nome) return;
+    if (nome === meuBicho.username) return _socialMsg("Você não pode se adicionar.", "erro");
+    if (ws?.readyState === WebSocket.OPEN) {
+        ws.send(JSON.stringify({ tipo: "add_amigo", username: nome }));
+        input.value = "";
+    }
+}
+window.adicionarAmigo = adicionarAmigo;
+
+function removerAmigo(friendId) {
+    if (ws?.readyState === WebSocket.OPEN) {
+        ws.send(JSON.stringify({ tipo: "remover_amigo", friend_id: friendId }));
+    }
+}
+window.removerAmigo = removerAmigo;
+
+function toggleFavoritoSalaAtual() {
+    if (ws?.readyState === WebSocket.OPEN) {
+        ws.send(JSON.stringify({ tipo: "toggle_favorito", room_id: minhaSala }));
+    }
+}
+window.toggleFavoritoSalaAtual = toggleFavoritoSalaAtual;
+
+// Verifica se um amigo está online na minha sala atual (pela lista de jogadores)
+function _amigoEstaOnline(username) {
+    if (username === meuBicho.username) return true;
+    for (const id in outrosJogadores) {
+        if (outrosJogadores[id].username === username) return true;
+    }
+    return false;
+}
+
+function renderizarSocial() {
+    // Botão de favoritar reflete o estado da sala atual
+    const btnFav = document.getElementById("btnFavSala");
+    if (btnFav) {
+        const favoritada = meusFavoritos.includes(minhaSala);
+        btnFav.classList.toggle("ativo", favoritada);
+        btnFav.textContent = favoritada
+            ? `★ SALA FAVORITADA (${minhaSala})`
+            : `☆ FAVORITAR ESTA SALA`;
+    }
+
+    // Lista de amigos
+    const lista = document.getElementById("listaAmigos");
+    const count = document.getElementById("amigosCount");
+    if (count) count.textContent = meusAmigos.length;
+    if (lista) {
+        if (meusAmigos.length === 0) {
+            lista.innerHTML = `<div class="social-vazio">Nenhum amigo ainda.</div>`;
+        } else {
+            lista.innerHTML = "";
+            meusAmigos.forEach(a => {
+                const online = _amigoEstaOnline(a.username);
+                const item = document.createElement("div");
+                item.className = "amigo-item";
+                const nome = document.createElement("div");
+                nome.className = "nome";
+                const dot = document.createElement("span");
+                dot.className = online ? "amigo-online" : "amigo-offline";
+                nome.appendChild(dot);
+                nome.appendChild(document.createTextNode(a.username));
+                const btn = document.createElement("button");
+                btn.className = "social-btn-acao remove";
+                btn.textContent = "×";
+                btn.title = "Remover amigo";
+                btn.onclick = () => removerAmigo(a.id);
+                item.appendChild(nome);
+                item.appendChild(btn);
+                lista.appendChild(item);
+            });
+        }
+    }
+
+    // Lista de favoritos
+    const favBox = document.getElementById("listaFavoritos");
+    if (favBox) {
+        if (meusFavoritos.length === 0) {
+            favBox.innerHTML = `<div class="social-vazio">Nenhuma sala favoritada.</div>`;
+        } else {
+            favBox.innerHTML = "";
+            meusFavoritos.forEach(room => {
+                const nomeSala = MAPAS[room]?.nome || room;
+                const item = document.createElement("div");
+                item.className = "fav-item";
+                const nome = document.createElement("div");
+                nome.className = "nome";
+                nome.textContent = `★ ${nomeSala}`;
+                const btn = document.createElement("button");
+                btn.className = "social-btn-acao remove";
+                btn.textContent = "×";
+                btn.title = "Desfavoritar";
+                btn.onclick = () => {
+                    if (ws?.readyState === WebSocket.OPEN)
+                        ws.send(JSON.stringify({ tipo: "toggle_favorito", room_id: room }));
+                };
+                item.appendChild(nome);
+                item.appendChild(btn);
+                favBox.appendChild(item);
+            });
+        }
+    }
+}
+
+// =====================================================
 //   CONEXÃO WEBSOCKET
 // =====================================================
 function conectar(opts = {}) {
@@ -600,6 +742,8 @@ function conectar(opts = {}) {
                 dados.chatTexto = ""; dados.chatTimer = 0; dados.isTyping = false;
                 dados.lado = dados.lado || "direita";
                 dados.animTick = 0; dados.movimentoTimer = 0;
+                dados.targetX = dados.x;   // inicializa alvo p/ interpolação
+                dados.targetY = dados.y;
                 outrosJogadores[dados.id] = dados;
             }
             // Evento de sistema — só no debug mode (não polui o chat)
@@ -608,10 +752,15 @@ function conectar(opts = {}) {
         else if (dados.tipo === "lista_jogadores") {
             // O servidor envia nosso próprio sid na primeira lista
             if (dados.meu_sid) meuSid = dados.meu_sid;
-            // Conta logada? guarda amigos/favoritos pra UI futura
+            // Conta logada? ativa o painel social e popula amigos/favoritos
             if (dados.conta) {
-                window.SALA33_CONTA = { amigos: dados.amigos || [], favoritos: dados.favoritos || [] };
+                contaAtiva = true;
+                meusAmigos = dados.amigos || [];
+                meusFavoritos = dados.favoritos || [];
+                const btnSocial = document.getElementById("btnSocialToggle");
+                if (btnSocial) btnSocial.style.display = "block";
                 registrarDebug("info", `» Logado como conta (${meuBicho.username}).`);
+                renderizarSocial();
             }
             dados.jogadores.forEach(p => {
                 if (p.id !== meuSid) {
@@ -623,6 +772,35 @@ function conectar(opts = {}) {
                     outrosJogadores[p.id] = p;
                 }
             });
+        }
+        else if (dados.tipo === "amigos") {
+            meusAmigos = dados.lista || [];
+            renderizarSocial();
+        }
+        else if (dados.tipo === "amigo_add") {
+            // Evita duplicar se já estiver na lista
+            if (!meusAmigos.some(a => a.id === dados.amigo.id)) {
+                meusAmigos.push(dados.amigo);
+            }
+            _socialMsg(`${dados.amigo.username} adicionado!`, "ok");
+            renderizarSocial();
+        }
+        else if (dados.tipo === "amigo_erro") {
+            _socialMsg(dados.mensagem || "Não foi possível adicionar.", "erro");
+        }
+        else if (dados.tipo === "amigo_removido") {
+            meusAmigos = meusAmigos.filter(a => a.id !== dados.friend_id);
+            renderizarSocial();
+        }
+        else if (dados.tipo === "favorito_estado") {
+            if (dados.favoritado === true) {
+                if (!meusFavoritos.includes(dados.room_id)) meusFavoritos.push(dados.room_id);
+                _socialMsg(`Sala favoritada!`, "ok");
+            } else if (dados.favoritado === false) {
+                meusFavoritos = meusFavoritos.filter(r => r !== dados.room_id);
+                _socialMsg(`Sala removida dos favoritos.`, "ok");
+            }
+            renderizarSocial();
         }
         else if (dados.tipo === "movimento") {
             if (outrosJogadores[dados.id]) {
@@ -825,15 +1003,24 @@ function atualizarFisica() {
             meuBicho.x += dx * v;
             meuBicho.y += dy * v;
             meuBicho.animTick += 0.25;
-            if (ws?.readyState === WebSocket.OPEN) {
-                ws.send(JSON.stringify({ tipo: "mover", x: meuBicho.x, y: meuBicho.y, lado: meuBicho.lado }));
-            }
+            movPendente = true;   // marca que há nova posição pra enviar
         } else {
             meuBicho.animTick = 0;
         }
 
         meuBicho.x = Math.max(0, Math.min(canvas.width - meuBicho.tamanho, meuBicho.x));
         meuBicho.y = Math.max(0, Math.min(canvas.height - meuBicho.tamanho, meuBicho.y));
+
+        // Envia movimento com throttle (~15x/s) em vez de a cada frame.
+        // Isso evita floodar o servidor e elimina os "TPs" que outros viam.
+        const agora = performance.now();
+        if (movPendente && agora - ultimoEnvioMov >= INTERVALO_MOV_MS) {
+            if (ws?.readyState === WebSocket.OPEN) {
+                ws.send(JSON.stringify({ tipo: "mover", x: meuBicho.x, y: meuBicho.y, lado: meuBicho.lado }));
+            }
+            ultimoEnvioMov = agora;
+            movPendente = false;
+        }
 
         // Verifica portas (usa WASM se disponível)
         for (const porta of (MAPAS[minhaSala]?.portas || [])) {
@@ -1053,8 +1240,20 @@ function desenhar() {
     // Outros jogadores
     for (const id in outrosJogadores) {
         const p = outrosJogadores[id];
-        p.x += (p.targetX - p.x) * 0.20;
-        p.y += (p.targetY - p.y) * 0.20;
+        // Interpolação suave em direção à última posição recebida do servidor.
+        // Protege contra targetX/Y indefinidos (evita NaN).
+        if (p.targetX === undefined) p.targetX = p.x;
+        if (p.targetY === undefined) p.targetY = p.y;
+        const dx = p.targetX - p.x;
+        const dy = p.targetY - p.y;
+        // Se a distância for grande (jogador deu "tp" real, ex: mudou de sala),
+        // snap direto em vez de deslizar lentamente.
+        if (Math.abs(dx) > 80 || Math.abs(dy) > 80) {
+            p.x = p.targetX; p.y = p.targetY;
+        } else {
+            p.x += dx * 0.25;
+            p.y += dy * 0.25;
+        }
         const bobeio = p.animTick > 0 ? Math.abs(Math.sin(p.animTick)) * -5 : 0;
         const img = imagensSprites[p.spriteId];
         if (img?.complete && img.naturalWidth !== 0) {
