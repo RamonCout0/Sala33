@@ -1,18 +1,20 @@
 # =====================================================
-#   Sala33 — Servidor Principal v2
+#   Sala33 — Servidor Único (v2.1)
 #
-#   Arquitectura:
-#     • HTTP estático + API REST + WebSocket na MESMA porta
-#     • State authoritative: servidor é a única fonte de verdade
-#     • Isolamento de sala por asyncio.Lock — zero state bleeding
-#     • JWT para autenticação opcional (mantém modo convidado)
-#     • Session logging async (fire-and-forget, nunca bloqueia o loop)
-#     • WASM Physics em public/wasm/physics.wasm (executado no cliente)
+#   TUDO num arquivo só:
+#     • HTTP estático + WebSocket na mesma porta
+#     • State authoritative (anti state-bleeding via lock)
+#     • Banco Postgres OPCIONAL e 100% não-bloqueante
+#       (se cair, o jogo continua normal em modo convidado)
+#     • Auth (registro/login) via WebSocket, não REST
+#     • Session logging fire-and-forget
+#
+#   Filosofia: o banco NUNCA fica no caminho crítico do jogo.
+#   Movimento, chat e salas funcionam mesmo sem Postgres.
 # =====================================================
 import asyncio
 import json
 import logging
-import mimetypes
 import os
 import pkgutil
 import importlib
@@ -21,6 +23,9 @@ import socket
 import threading
 import time
 import uuid
+import hashlib
+import hmac
+import base64
 from http.server import SimpleHTTPRequestHandler
 from socketserver import ThreadingTCPServer
 
@@ -28,7 +33,6 @@ import websockets
 from websockets.http11 import Response
 from websockets.datastructures import Headers as WsHeaders
 
-# Suprime health-check noise do Railway
 logging.getLogger("websockets.server").setLevel(logging.CRITICAL)
 logging.getLogger("websockets.asyncio.server").setLevel(logging.CRITICAL)
 
@@ -40,23 +44,253 @@ PUBLIC_DIR    = os.path.join(ROOT_DIR, "public")
 MODO_PRODUCAO = "PORT" in os.environ and "PORT_HTTP" not in os.environ
 PORT_WS       = int(os.environ.get("PORT", 8080))
 PORT_HTTP     = int(os.environ.get("PORT_HTTP", 8000))
+DATABASE_URL  = os.environ.get("DATABASE_URL", "")
+JWT_SECRET    = os.environ.get("JWT_SECRET", "sala33-dev-secret-troque-em-prod")
 
-# DB / Auth (imports opcionais — se não houver Postgres, roda sem)
-try:
-    import db as _db
-    import auth as _auth
-    DB_DISPONIVEL = True
-except ImportError:
-    DB_DISPONIVEL = False
-    print("[AVISO] asyncpg/passlib não encontrados — modo sem banco de dados.")
+# ──────────────────────────────────────────────────────────────
+#   BANCO DE DADOS — opcional, isolado, não-bloqueante
+#
+#   Toda função de banco é "best-effort": se o pool estiver
+#   indisponível, retorna None/False sem lançar exceção e sem
+#   travar o loop de jogo.
+# ──────────────────────────────────────────────────────────────
+class Banco:
+    def __init__(self):
+        self.pool = None
+        self.ativo = False
+        self._log_queue = asyncio.Queue(maxsize=2000)
 
-# API REST
-try:
-    from api import handle_api
-    API_DISPONIVEL = True
-except ImportError:
-    API_DISPONIVEL = False
-    async def handle_api(*_): return None
+    async def conectar(self):
+        """Tenta conectar. Se falhar, marca como inativo e segue a vida."""
+        if not DATABASE_URL:
+            print("[db] DATABASE_URL não definida — modo sem banco (convidado apenas).")
+            return
+        try:
+            import asyncpg
+        except ImportError:
+            print("[db] asyncpg não instalado — modo sem banco.")
+            return
+        try:
+            url = DATABASE_URL.replace("postgresql+asyncpg://", "postgresql://")
+            self.pool = await asyncio.wait_for(
+                asyncpg.create_pool(url, min_size=1, max_size=8, command_timeout=8),
+                timeout=10,
+            )
+            await self._criar_tabelas()
+            self.ativo = True
+            asyncio.create_task(self._log_worker())
+            print("[db] PostgreSQL conectado ✓")
+        except Exception as e:
+            print(f"[db] Indisponível ({type(e).__name__}) — modo sem banco.")
+            self.pool = None
+            self.ativo = False
+
+    async def _criar_tabelas(self):
+        async with self.pool.acquire() as c:
+            await c.execute("""
+                CREATE TABLE IF NOT EXISTS users (
+                    id SERIAL PRIMARY KEY,
+                    username VARCHAR(20) UNIQUE NOT NULL,
+                    password_hash VARCHAR(200) NOT NULL,
+                    sprite_id VARCHAR(40) DEFAULT 'cinzaguy',
+                    bio TEXT DEFAULT '',
+                    created_at TIMESTAMPTZ DEFAULT NOW()
+                );
+                CREATE TABLE IF NOT EXISTS friendships (
+                    id SERIAL PRIMARY KEY,
+                    user_id INTEGER REFERENCES users(id) ON DELETE CASCADE,
+                    friend_id INTEGER REFERENCES users(id) ON DELETE CASCADE,
+                    created_at TIMESTAMPTZ DEFAULT NOW(),
+                    UNIQUE(user_id, friend_id)
+                );
+                CREATE TABLE IF NOT EXISTS favorite_rooms (
+                    id SERIAL PRIMARY KEY,
+                    user_id INTEGER REFERENCES users(id) ON DELETE CASCADE,
+                    room_id VARCHAR(60) NOT NULL,
+                    created_at TIMESTAMPTZ DEFAULT NOW(),
+                    UNIQUE(user_id, room_id)
+                );
+                CREATE TABLE IF NOT EXISTS session_logs (
+                    id BIGSERIAL PRIMARY KEY,
+                    user_id INTEGER,
+                    username VARCHAR(20),
+                    action VARCHAR(30) NOT NULL,
+                    room_id VARCHAR(60),
+                    created_at TIMESTAMPTZ DEFAULT NOW()
+                );
+                CREATE INDEX IF NOT EXISTS idx_friend_user ON friendships(user_id);
+                CREATE INDEX IF NOT EXISTS idx_fav_user ON favorite_rooms(user_id);
+            """)
+
+    # ---- Auth ----
+    async def criar_usuario(self, username, password_hash):
+        if not self.ativo: return None
+        try:
+            row = await self.pool.fetchrow(
+                "INSERT INTO users(username,password_hash) VALUES($1,$2) "
+                "RETURNING id,username,sprite_id,bio",
+                username, password_hash)
+            return dict(row) if row else None
+        except Exception:
+            return None  # username duplicado ou erro
+
+    async def buscar_usuario(self, username):
+        if not self.ativo: return None
+        try:
+            row = await self.pool.fetchrow(
+                "SELECT id,username,password_hash,sprite_id,bio FROM users WHERE username=$1",
+                username)
+            return dict(row) if row else None
+        except Exception:
+            return None
+
+    async def atualizar_perfil(self, user_id, sprite_id, bio):
+        if not self.ativo: return None
+        try:
+            row = await self.pool.fetchrow(
+                "UPDATE users SET sprite_id=COALESCE($2,sprite_id), bio=COALESCE($3,bio) "
+                "WHERE id=$1 RETURNING id,username,sprite_id,bio",
+                user_id, sprite_id, bio)
+            return dict(row) if row else None
+        except Exception:
+            return None
+
+    # ---- Amigos ----
+    async def listar_amigos(self, user_id):
+        if not self.ativo: return []
+        try:
+            rows = await self.pool.fetch(
+                "SELECT u.id,u.username,u.sprite_id FROM friendships f "
+                "JOIN users u ON u.id=f.friend_id WHERE f.user_id=$1 ORDER BY u.username",
+                user_id)
+            return [dict(r) for r in rows]
+        except Exception:
+            return []
+
+    async def add_amigo(self, user_id, friend_username):
+        if not self.ativo: return None
+        try:
+            friend = await self.buscar_usuario(friend_username)
+            if not friend or friend["id"] == user_id:
+                return None
+            await self.pool.execute(
+                "INSERT INTO friendships(user_id,friend_id) VALUES($1,$2) ON CONFLICT DO NOTHING",
+                user_id, friend["id"])
+            return {"id": friend["id"], "username": friend["username"], "sprite_id": friend["sprite_id"]}
+        except Exception:
+            return None
+
+    async def remover_amigo(self, user_id, friend_id):
+        if not self.ativo: return False
+        try:
+            await self.pool.execute(
+                "DELETE FROM friendships WHERE user_id=$1 AND friend_id=$2", user_id, friend_id)
+            return True
+        except Exception:
+            return False
+
+    # ---- Favoritos ----
+    async def listar_favoritos(self, user_id):
+        if not self.ativo: return []
+        try:
+            rows = await self.pool.fetch(
+                "SELECT room_id FROM favorite_rooms WHERE user_id=$1 ORDER BY created_at DESC", user_id)
+            return [r["room_id"] for r in rows]
+        except Exception:
+            return []
+
+    async def toggle_favorito(self, user_id, room_id):
+        """Adiciona se não existe, remove se existe. Retorna o novo estado."""
+        if not self.ativo: return None
+        try:
+            existe = await self.pool.fetchval(
+                "SELECT 1 FROM favorite_rooms WHERE user_id=$1 AND room_id=$2", user_id, room_id)
+            if existe:
+                await self.pool.execute(
+                    "DELETE FROM favorite_rooms WHERE user_id=$1 AND room_id=$2", user_id, room_id)
+                return False
+            else:
+                await self.pool.execute(
+                    "INSERT INTO favorite_rooms(user_id,room_id) VALUES($1,$2)", user_id, room_id)
+                return True
+        except Exception:
+            return None
+
+    # ---- Logs (fire-and-forget) ----
+    def log(self, user_id, username, action, room_id=None):
+        if not self.ativo: return
+        try:
+            self._log_queue.put_nowait((user_id, username, action, room_id))
+        except asyncio.QueueFull:
+            pass
+
+    async def _log_worker(self):
+        while True:
+            try:
+                batch = [await self._log_queue.get()]
+                while not self._log_queue.empty() and len(batch) < 50:
+                    batch.append(self._log_queue.get_nowait())
+                await self.pool.executemany(
+                    "INSERT INTO session_logs(user_id,username,action,room_id) VALUES($1,$2,$3,$4)",
+                    batch)
+            except Exception:
+                await asyncio.sleep(2)  # erro? espera e continua
+
+
+banco = Banco()
+
+
+# ──────────────────────────────────────────────────────────────
+#   JWT mínimo (sem dependência externa — usa hmac/sha256)
+# ──────────────────────────────────────────────────────────────
+def _b64url(data: bytes) -> str:
+    return base64.urlsafe_b64encode(data).rstrip(b"=").decode()
+
+def _b64url_decode(s: str) -> bytes:
+    pad = "=" * (-len(s) % 4)
+    return base64.urlsafe_b64decode(s + pad)
+
+def gerar_token(user_id: int, username: str) -> str:
+    header = _b64url(json.dumps({"alg": "HS256", "typ": "JWT"}).encode())
+    exp = int(time.time()) + 60 * 60 * 24 * 7  # 1 semana
+    payload = _b64url(json.dumps({"sub": user_id, "username": username, "exp": exp}).encode())
+    msg = f"{header}.{payload}"
+    sig = hmac.new(JWT_SECRET.encode(), msg.encode(), hashlib.sha256).digest()
+    return f"{msg}.{_b64url(sig)}"
+
+def validar_token(token: str):
+    try:
+        header, payload, sig = token.split(".")
+        msg = f"{header}.{payload}"
+        esperado = _b64url(hmac.new(JWT_SECRET.encode(), msg.encode(), hashlib.sha256).digest())
+        if not hmac.compare_digest(sig, esperado):
+            return None
+        dados = json.loads(_b64url_decode(payload))
+        if dados.get("exp", 0) < time.time():
+            return None
+        return dados
+    except Exception:
+        return None
+
+
+# ──────────────────────────────────────────────────────────────
+#   Hash de senha (PBKDF2 — stdlib, sem bcrypt/passlib)
+# ──────────────────────────────────────────────────────────────
+def hash_senha(senha: str) -> str:
+    salt = os.urandom(16)
+    dk = hashlib.pbkdf2_hmac("sha256", senha.encode(), salt, 100_000)
+    return f"{base64.b64encode(salt).decode()}${base64.b64encode(dk).decode()}"
+
+def verificar_senha(senha: str, stored: str) -> bool:
+    try:
+        salt_b64, dk_b64 = stored.split("$")
+        salt = base64.b64decode(salt_b64)
+        dk = base64.b64decode(dk_b64)
+        novo = hashlib.pbkdf2_hmac("sha256", senha.encode(), salt, 100_000)
+        return hmac.compare_digest(novo, dk)
+    except Exception:
+        return False
+
 
 # ──────────────────────────────────────────────────────────────
 #   MANIFEST & CONFIG
@@ -74,42 +308,33 @@ SALA_INICIAL = MANIFEST.get("salaInicial", "the_hub")
 
 SPRITES_VALIDOS = {"cinzaguy"}
 for _p in _ler_json(os.path.join(PUBLIC_DIR, "mods", "personagens.json"), []):
-    SPRITES_VALIDOS.add(_p.get("id", ""))
+    if _p.get("id"):
+        SPRITES_VALIDOS.add(_p["id"])
 
 # ──────────────────────────────────────────────────────────────
-#   CONSTANTES DE SEGURANÇA
+#   SEGURANÇA / CONSTANTES
 # ──────────────────────────────────────────────────────────────
 MAX_MSG_BYTES    = 2048
 MAX_CHAT_LEN     = 200
-MAX_USERNAME_LEN = 20
+MAX_USERNAME_LEN = 16
 RATE_LIMIT_MSGS  = 30
 RATE_LIMIT_WIN   = 1.0
 USERNAME_RE      = re.compile(r"^[A-Za-z0-9_\- ]+$")
 LADOS_VALIDOS    = {"esquerda", "direita"}
 
-
-def _lado(v):     return v if v in LADOS_VALIDOS else "direita"
-def _sprite(v):   return v if v in SPRITES_VALIDOS else "cinzaguy"
+def _lado(v):   return v if v in LADOS_VALIDOS else "direita"
+def _sprite(v): return v if v in SPRITES_VALIDOS else "cinzaguy"
 def _sanitize_username(v):
     v = str(v).strip()[:MAX_USERNAME_LEN].upper()
     return v if v and USERNAME_RE.match(v) else None
 
 
 # ──────────────────────────────────────────────────────────────
-#   STATE AUTHORITATIVE — único ponto de verdade
-#
-#   Resolve o bug de state bleeding:
-#   sala_atual NUNCA é cacheada em variável local.
-#   Toda leitura/escrita passa pelo dict de sessão, protegido por lock.
+#   STATE AUTHORITATIVE
 # ──────────────────────────────────────────────────────────────
-class SessionState:
-    """Estado completo de um jogador conectado."""
-    __slots__ = (
-        "sid", "ws", "queue",
-        "user_id", "username", "sala",
-        "x", "y", "sprite_id", "lado", "logado",
-    )
-
+class Sessao:
+    __slots__ = ("sid","ws","queue","user_id","username","sala",
+                 "x","y","sprite_id","lado","logado")
     def __init__(self, ws):
         self.sid      = str(uuid.uuid4())
         self.ws       = ws
@@ -124,213 +349,144 @@ class SessionState:
         self.logado   = False
 
     def to_dict(self):
-        return {
-            "id":       self.sid,
-            "username": self.username,
-            "x":        self.x,
-            "y":        self.y,
-            "spriteId": self.sprite_id,
-            "lado":     self.lado,
-        }
+        return {"id": self.sid, "username": self.username,
+                "x": self.x, "y": self.y, "spriteId": self.sprite_id, "lado": self.lado}
 
-    async def enviar(self, payload: dict):
-        msg = json.dumps(payload)
+    async def enviar(self, payload):
         try:
-            self.queue.put_nowait(msg)
+            self.queue.put_nowait(json.dumps(payload))
         except asyncio.QueueFull:
             try:
                 self.queue.get_nowait()
-                self.queue.put_nowait(msg)
+                self.queue.put_nowait(json.dumps(payload))
             except Exception:
                 pass
 
 
-class RoomHub:
-    """
-    Hub de conexões e roteamento por sala.
-    Lock por operação de entrada/saída para garantir atomicidade.
-    """
-
-    def __init__(self, salas: list[str]):
-        self._sessions: dict[str, SessionState] = {}
-        self._salas: dict[str, set[str]]        = {s: set() for s in salas}
+class Hub:
+    def __init__(self, salas):
+        self._sessions = {}
+        self._salas = {s: set() for s in salas}
         self._lock = asyncio.Lock()
 
-    # ── Sessões ──────────────────────────────────────────────
-    async def registrar(self, session: SessionState):
+    async def registrar(self, s):
         async with self._lock:
-            self._sessions[session.sid] = session
+            self._sessions[s.sid] = s
 
-    async def remover(self, sid: str) -> SessionState | None:
+    async def remover(self, sid):
         async with self._lock:
-            session = self._sessions.pop(sid, None)
-            if session and session.sala and session.sala in self._salas:
-                self._salas[session.sala].discard(sid)
-            return session
+            s = self._sessions.pop(sid, None)
+            if s and s.sala and s.sala in self._salas:
+                self._salas[s.sala].discard(sid)
+            return s
 
-    def get(self, sid: str) -> SessionState | None:
-        return self._sessions.get(sid)
+    def username_em_uso(self, username):
+        return any(s.logado and s.username == username for s in self._sessions.values())
 
-    def username_em_uso(self, username: str) -> bool:
-        return any(
-            s.logado and s.username == username
-            for s in self._sessions.values()
-        )
-
-    def total_online(self) -> int:
-        return sum(1 for s in self._sessions.values() if s.logado)
-
-    # ── Salas ────────────────────────────────────────────────
-    async def mover_para_sala(self, sid: str, nova_sala: str) -> bool:
-        """Transição atômica entre salas. Retorna False se falhar."""
+    async def mover_para_sala(self, sid, nova_sala):
         async with self._lock:
-            session = self._sessions.get(sid)
-            if not session or nova_sala not in self._salas:
+            s = self._sessions.get(sid)
+            if not s or nova_sala not in self._salas:
                 return False
-            sala_antiga = session.sala
-            if sala_antiga and sala_antiga in self._salas:
-                self._salas[sala_antiga].discard(sid)
+            if s.sala and s.sala in self._salas:
+                self._salas[s.sala].discard(sid)
             self._salas[nova_sala].add(sid)
-            session.sala = nova_sala
+            s.sala = nova_sala
             return True
 
-    def sala_de(self, sid: str) -> str | None:
-        """Lê a sala AGORA — nunca cacheia. Resolve state bleeding."""
+    def sala_de(self, sid):
         s = self._sessions.get(sid)
         return s.sala if s else None
 
-    async def snapshot_sala(self, sala_id: str) -> list[SessionState]:
-        """Snapshot atômico dos membros da sala."""
+    async def snapshot_sala(self, sala_id):
         async with self._lock:
-            return [
-                self._sessions[sid]
-                for sid in self._salas.get(sala_id, set())
-                if sid in self._sessions
-            ]
+            return [self._sessions[sid] for sid in self._salas.get(sala_id, set())
+                    if sid in self._sessions]
 
-    def salas_disponiveis(self) -> list[str]:
+    def salas_disponiveis(self):
         return list(self._salas.keys())
 
-    # ── Broadcast ────────────────────────────────────────────
-    async def broadcast(self, sala_id: str, payload: dict, exceto: str | None = None):
-        """
-        Broadcast para todos na sala.
-        Snapshot dentro do lock, envio fora — evita deadlock.
-        """
+    async def broadcast(self, sala_id, payload, exceto=None):
         async with self._lock:
-            destinos = [
-                self._sessions[sid]
-                for sid in self._salas.get(sala_id, set())
-                if sid in self._sessions and sid != exceto
-            ]
+            destinos = [self._sessions[sid] for sid in self._salas.get(sala_id, set())
+                        if sid in self._sessions and sid != exceto]
         for s in destinos:
             await s.enviar(payload)
 
 
 # ──────────────────────────────────────────────────────────────
-#   SERVER MODS (compatibilidade com server_mods/*.py)
+#   SERVER MODS (compat com server_mods/*.py)
 # ──────────────────────────────────────────────────────────────
-HANDLERS_POR_TIPO: dict = {}
-MODS_COM_TICK:     list = []
-MODS_COM_LEAVE:    list = []
-MOD_SALA:          dict = {}
+HANDLERS_POR_TIPO, MODS_COM_TICK, MODS_COM_LEAVE, MOD_SALA = {}, [], [], {}
 
-# Proxies que expõem a interface legada (dict de jogadores e set de salas)
-# pra os mods antigos continuarem funcionando sem reescrita.
-class _JogadoresProxy:
-    def __init__(self, hub: "RoomHub"):
-        self._hub = hub
-
-    def _ws_to_session(self, ws) -> SessionState | None:
+class _JogProxy:
+    def __init__(self, hub): self._hub = hub
+    def _find(self, ws):
         for s in self._hub._sessions.values():
-            if s.ws is ws:
-                return s
+            if s.ws is ws: return s
         return None
-
-    def __contains__(self, ws):
-        return self._ws_to_session(ws) is not None
-
+    def __contains__(self, ws): return self._find(ws) is not None
     def __getitem__(self, ws):
-        s = self._ws_to_session(ws)
+        s = self._find(ws)
         if not s: raise KeyError(ws)
-        return _SessionDictProxy(s)
+        return _SessProxy(s)
+    def get(self, ws, d=None):
+        s = self._find(ws); return _SessProxy(s) if s else d
+    def values(self): return [_SessProxy(s) for s in self._hub._sessions.values()]
 
-    def get(self, ws, default=None):
-        s = self._ws_to_session(ws)
-        return _SessionDictProxy(s) if s else default
-
-    def values(self):
-        return [_SessionDictProxy(s) for s in self._hub._sessions.values()]
-
-
-class _SessionDictProxy:
-    _MAP = {"username": "username", "sala": "sala", "x": "x", "y": "y",
-            "spriteId": "sprite_id", "lado": "lado", "logado": "logado"}
-
-    def __init__(self, session: SessionState):
-        self._s = session
-
+class _SessProxy:
+    _MAP = {"username":"username","sala":"sala","x":"x","y":"y",
+            "spriteId":"sprite_id","lado":"lado","logado":"logado"}
+    def __init__(self, s): self._s = s
     def __getitem__(self, k):
         if k == "queue": return self._s.queue
-        attr = self._MAP.get(k)
-        if attr: return getattr(self._s, attr)
+        a = self._MAP.get(k)
+        if a: return getattr(self._s, a)
         raise KeyError(k)
-
     def __setitem__(self, k, v):
-        attr = self._MAP.get(k)
-        if attr: setattr(self._s, attr, v)
-
+        a = self._MAP.get(k)
+        if a: setattr(self._s, a, v)
     def get(self, k, d=None):
         try: return self[k]
         except KeyError: return d
 
-
 class _SalasProxy:
-    def __init__(self, hub: "RoomHub"):
-        self._hub = hub
-
-    def __contains__(self, sala): return sala in self._hub._salas
-
+    def __init__(self, hub): self._hub = hub
+    def __contains__(self, s): return s in self._hub._salas
     def __getitem__(self, sala):
-        return {self._hub._sessions[sid].ws
-                for sid in self._hub._salas.get(sala, set())
+        return {self._hub._sessions[sid].ws for sid in self._hub._salas.get(sala, set())
                 if sid in self._hub._sessions}
-
-    def get(self, sala, d=None):
-        return self[sala] if sala in self._hub._salas else d
-
+    def get(self, s, d=None): return self[s] if s in self._hub._salas else d
     def keys(self): return self._hub._salas.keys()
-
 
 def carregar_server_mods():
     try:
         import server_mods
     except ImportError:
         return
-    for _, mod_name, _ in pkgutil.iter_modules(server_mods.__path__):
+    for _, name, _ in pkgutil.iter_modules(server_mods.__path__):
         try:
-            mod = importlib.import_module(f"server_mods.{mod_name}")
+            mod = importlib.import_module(f"server_mods.{name}")
             if hasattr(mod, "HANDLES") and hasattr(mod, "handle"):
                 sala_esp = getattr(mod, "SALA", None)
-                for tipo in mod.HANDLES:
-                    HANDLERS_POR_TIPO[tipo] = mod
-                    if sala_esp: MOD_SALA[tipo] = sala_esp
-                print(f"  ✓ server_mods.{mod_name}  →  {mod.HANDLES}")
-            if hasattr(mod, "tick"):   MODS_COM_TICK.append(mod)
+                for t in mod.HANDLES:
+                    HANDLERS_POR_TIPO[t] = mod
+                    if sala_esp: MOD_SALA[t] = sala_esp
+                print(f"  ✓ server_mods.{name}  →  {mod.HANDLES}")
+            if hasattr(mod, "tick"): MODS_COM_TICK.append(mod)
             if hasattr(mod, "on_leave"): MODS_COM_LEAVE.append(mod)
         except Exception as e:
-            print(f"  ✗ server_mods.{mod_name}  →  {e}")
+            print(f"  ✗ server_mods.{name}  →  {e}")
 
 
 # ──────────────────────────────────────────────────────────────
 #   RATE LIMITER
 # ──────────────────────────────────────────────────────────────
 class RateLimiter:
-    __slots__ = ("_max", "_win", "_ts")
-    def __init__(self, max_msgs=RATE_LIMIT_MSGS, win=RATE_LIMIT_WIN):
-        self._max = max_msgs; self._win = win; self._ts = []
-
-    def permitir(self) -> bool:
+    __slots__ = ("_max","_win","_ts")
+    def __init__(self, m=RATE_LIMIT_MSGS, w=RATE_LIMIT_WIN):
+        self._max=m; self._win=w; self._ts=[]
+    def permitir(self):
         agora = time.monotonic()
         self._ts = [t for t in self._ts if agora - t < self._win]
         if len(self._ts) >= self._max: return False
@@ -338,356 +494,306 @@ class RateLimiter:
 
 
 # ──────────────────────────────────────────────────────────────
-#   LOOPS DE FUNDO
+#   LOOP DE MINIGAMES
 # ──────────────────────────────────────────────────────────────
-async def loop_minigames(hub: "RoomHub"):
-    jogadores_p = _JogadoresProxy(hub)
-    salas_p     = _SalasProxy(hub)
-
-    async def _enviar_para_sala(sala, payload):
-        await hub.broadcast(sala, payload)
-
+async def loop_minigames(hub):
+    jp, sp = _JogProxy(hub), _SalasProxy(hub)
+    async def _envia(sala, payload): await hub.broadcast(sala, payload)
     while True:
-        await asyncio.sleep(1 / 60)
+        await asyncio.sleep(1/60)
         for mod in MODS_COM_TICK:
             try:
-                await mod.tick(jogadores_p, salas_p, _enviar_para_sala)
+                await mod.tick(jp, sp, _envia)
             except Exception as e:
-                print(f"[tick:{getattr(mod,'__name__','')}] {e}")
+                print(f"[tick] {e}")
 
 
 # ──────────────────────────────────────────────────────────────
-#   HANDLER PRINCIPAL
+#   HANDLER WEBSOCKET
 # ──────────────────────────────────────────────────────────────
-async def escritor(session: SessionState):
-    """Drena a queue de mensagens pro socket."""
+async def escritor(s):
     try:
         while True:
-            msg = await session.queue.get()
-            await session.ws.send(msg)
-            session.queue.task_done()
+            msg = await s.queue.get()
+            await s.ws.send(msg)
+            s.queue.task_done()
     except (websockets.exceptions.ConnectionClosed, asyncio.CancelledError):
         pass
 
-
-async def handler_ws(websocket, hub: "RoomHub"):
-    session = SessionState(websocket)
-    await hub.registrar(session)
-    rate    = RateLimiter()
-    escrita = asyncio.create_task(escritor(session))
-
-    # Proxies pra compatibilidade com mods legados
-    jogadores_p = _JogadoresProxy(hub)
-    salas_p     = _SalasProxy(hub)
-
-    async def _broadcast_mod(sala, payload):
-        await hub.broadcast(sala, payload)
+async def handler_ws(websocket, hub):
+    s = Sessao(websocket)
+    await hub.registrar(s)
+    rate = RateLimiter()
+    escrita = asyncio.create_task(escritor(s))
+    jp, sp = _JogProxy(hub), _SalasProxy(hub)
+    async def _broadcast_mod(sala, payload): await hub.broadcast(sala, payload)
 
     try:
         async for message in websocket:
             if len(message) > MAX_MSG_BYTES or not rate.permitir():
                 continue
             try:
-                dados = json.loads(message)
+                d = json.loads(message)
             except Exception:
                 continue
-            if not isinstance(dados, dict):
+            if not isinstance(d, dict): continue
+            tipo = d.get("tipo")
+            if not isinstance(tipo, str): continue
+
+            # ═══ AUTENTICAÇÃO (via WebSocket) ═══════════════════
+            if tipo == "registrar":
+                username = _sanitize_username(d.get("username"))
+                senha = str(d.get("password", ""))
+                if not username:
+                    await s.enviar({"tipo":"auth_erro","mensagem":"Nome inválido."}); continue
+                if len(senha) < 6:
+                    await s.enviar({"tipo":"auth_erro","mensagem":"Senha precisa de 6+ caracteres."}); continue
+                if not banco.ativo:
+                    await s.enviar({"tipo":"auth_erro","mensagem":"Cadastro indisponível. Entre como convidado."}); continue
+                user = await banco.criar_usuario(username, hash_senha(senha))
+                if not user:
+                    await s.enviar({"tipo":"auth_erro","mensagem":"Nome já cadastrado."}); continue
+                token = gerar_token(user["id"], user["username"])
+                await s.enviar({"tipo":"auth_ok","token":token,"user":{
+                    "id":user["id"],"username":user["username"],
+                    "sprite_id":user["sprite_id"],"bio":user.get("bio","")}})
+                banco.log(user["id"], user["username"], "register")
                 continue
 
-            tipo = dados.get("tipo")
-            if not isinstance(tipo, str):
+            if tipo == "autenticar":
+                username = _sanitize_username(d.get("username"))
+                senha = str(d.get("password", ""))
+                if not banco.ativo:
+                    await s.enviar({"tipo":"auth_erro","mensagem":"Login indisponível. Entre como convidado."}); continue
+                user = await banco.buscar_usuario(username) if username else None
+                if not user or not verificar_senha(senha, user["password_hash"]):
+                    await s.enviar({"tipo":"auth_erro","mensagem":"Usuário ou senha inválidos."}); continue
+                token = gerar_token(user["id"], user["username"])
+                await s.enviar({"tipo":"auth_ok","token":token,"user":{
+                    "id":user["id"],"username":user["username"],
+                    "sprite_id":user["sprite_id"],"bio":user.get("bio","")}})
+                banco.log(user["id"], user["username"], "login")
                 continue
 
-            # ── LOGIN ──────────────────────────────────────────
+            # ═══ LOGIN no jogo (convidado OU autenticado) ═══════
             if tipo == "login":
-                if session.logado:
-                    continue
-
-                # Modo autenticado via JWT
-                token = dados.get("token")
-                if token and DB_DISPONIVEL:
-                    payload = _auth.validar_token(token)
+                if s.logado: continue
+                token = d.get("token")
+                if token:
+                    payload = validar_token(token)
                     if not payload:
-                        await session.enviar({"tipo": "erro_login", "mensagem": "Token inválido."})
-                        continue
+                        await s.enviar({"tipo":"erro_login","mensagem":"Sessão expirada."}); continue
                     username = payload["username"]
-                    user_id  = int(payload["sub"])
+                    s.user_id = payload["sub"]
                 else:
-                    # Modo convidado
-                    raw = dados.get("username", "")
-                    username = _sanitize_username(raw)
+                    username = _sanitize_username(d.get("username"))
                     if not username:
-                        await session.enviar({"tipo": "erro_login", "mensagem": "Nome inválido. Use letras, números, _ e -."})
-                        continue
-                    user_id = None
-
+                        await s.enviar({"tipo":"erro_login","mensagem":"Nome inválido."}); continue
+                    s.user_id = None
                 if hub.username_em_uso(username):
-                    await session.enviar({"tipo": "erro_login", "mensagem": f"'{username}' já está em uso."})
-                    continue
+                    await s.enviar({"tipo":"erro_login","mensagem":f"'{username}' já está online."}); continue
 
-                session.username  = username
-                session.sprite_id = _sprite(dados.get("spriteId", "cinzaguy"))
-                session.lado      = _lado(dados.get("lado", "direita"))
-                session.user_id   = user_id
-                session.logado    = True
+                s.username  = username
+                s.sprite_id = _sprite(d.get("spriteId","cinzaguy"))
+                s.lado      = _lado(d.get("lado","direita"))
+                s.logado    = True
 
-                # Move pra sala inicial (atômico)
-                ok = await hub.mover_para_sala(session.sid, SALA_INICIAL)
+                ok = await hub.mover_para_sala(s.sid, SALA_INICIAL)
                 if ok:
-                    outros = [s.to_dict() for s in await hub.snapshot_sala(SALA_INICIAL)
-                              if s.sid != session.sid]
-                    await session.enviar({
-                        "tipo": "lista_jogadores",
-                        "meu_sid": session.sid,   # cliente usa pra se identificar
-                        "jogadores": outros,
-                    })
-                    await hub.broadcast(SALA_INICIAL,
-                        {"tipo": "novo_jogador", **session.to_dict()},
-                        exceto=session.sid)
-
-                    if DB_DISPONIVEL:
-                        _db.log_action(user_id, username, "join", SALA_INICIAL)
-
+                    outros = [o.to_dict() for o in await hub.snapshot_sala(SALA_INICIAL) if o.sid != s.sid]
+                    # Manda dados extras: favoritos e amigos (se logado via conta)
+                    extras = {}
+                    if s.user_id and banco.ativo:
+                        extras["favoritos"] = await banco.listar_favoritos(s.user_id)
+                        extras["amigos"] = await banco.listar_amigos(s.user_id)
+                    await s.enviar({"tipo":"lista_jogadores","meu_sid":s.sid,
+                                    "jogadores":outros, "conta": bool(s.user_id), **extras})
+                    await hub.broadcast(SALA_INICIAL, {"tipo":"novo_jogador", **s.to_dict()}, exceto=s.sid)
+                    banco.log(s.user_id, username, "join", SALA_INICIAL)
                 continue
 
-            # ── Rejeita não-logados ────────────────────────────
-            if not session.logado:
+            if not s.logado:
                 continue
 
-            # ── MOVER ─────────────────────────────────────────
+            # ═══ PERFIL / SOCIAL (requer conta) ═════════════════
+            if tipo == "atualizar_perfil":
+                if not s.user_id: 
+                    await s.enviar({"tipo":"perfil_erro","mensagem":"Apenas contas podem editar perfil."}); continue
+                sprite = d.get("sprite_id")
+                bio = d.get("bio")
+                if sprite is not None: sprite = _sprite(sprite)
+                if bio is not None: bio = str(bio)[:280]
+                user = await banco.atualizar_perfil(s.user_id, sprite, bio)
+                if user:
+                    if sprite: s.sprite_id = sprite
+                    await s.enviar({"tipo":"perfil_ok","user":user})
+                continue
+
+            if tipo == "listar_amigos":
+                if s.user_id:
+                    await s.enviar({"tipo":"amigos","lista":await banco.listar_amigos(s.user_id)})
+                continue
+
+            if tipo == "add_amigo":
+                if s.user_id:
+                    alvo = _sanitize_username(d.get("username"))
+                    r = await banco.add_amigo(s.user_id, alvo) if alvo else None
+                    if r: await s.enviar({"tipo":"amigo_add","amigo":r})
+                    else: await s.enviar({"tipo":"amigo_erro","mensagem":"Não foi possível adicionar."})
+                continue
+
+            if tipo == "remover_amigo":
+                if s.user_id:
+                    fid = d.get("friend_id")
+                    if isinstance(fid, int):
+                        await banco.remover_amigo(s.user_id, fid)
+                        await s.enviar({"tipo":"amigo_removido","friend_id":fid})
+                continue
+
+            if tipo == "toggle_favorito":
+                if s.user_id:
+                    room = str(d.get("room_id",""))[:60]
+                    if room:
+                        estado = await banco.toggle_favorito(s.user_id, room)
+                        await s.enviar({"tipo":"favorito_estado","room_id":room,"favoritado":estado})
+                continue
+
+            # ═══ MOVER ══════════════════════════════════════════
             if tipo == "mover":
-                # Lê sala AGORA — nunca de variável local (anti-bleeding)
-                sala = hub.sala_de(session.sid)
+                sala = hub.sala_de(s.sid)
                 if not sala: continue
-                x = dados.get("x"); y = dados.get("y")
-                if not isinstance(x, (int, float)) or not isinstance(y, (int, float)):
-                    continue
-                session.x    = max(0.0, min(368.0, float(x)))
-                session.y    = max(0.0, min(268.0, float(y)))
-                session.lado = _lado(dados.get("lado", session.lado))
-                await hub.broadcast(sala, {
-                    "tipo": "movimento", "id": session.sid,
-                    "x": session.x, "y": session.y, "lado": session.lado,
-                }, exceto=session.sid)
+                x, y = d.get("x"), d.get("y")
+                if not isinstance(x,(int,float)) or not isinstance(y,(int,float)): continue
+                s.x = max(0.0, min(368.0, float(x)))
+                s.y = max(0.0, min(268.0, float(y)))
+                s.lado = _lado(d.get("lado", s.lado))
+                await hub.broadcast(sala, {"tipo":"movimento","id":s.sid,
+                    "x":s.x,"y":s.y,"lado":s.lado}, exceto=s.sid)
 
-            # ── MUDAR SALA ────────────────────────────────────
+            # ═══ MUDAR SALA ═════════════════════════════════════
             elif tipo == "mudar_sala":
-                nova_sala = dados.get("nova_sala")
-                if not isinstance(nova_sala, str) or nova_sala not in hub.salas_disponiveis():
-                    continue
-
-                sala_antiga = hub.sala_de(session.sid)
-                x = dados.get("x", 200); y = dados.get("y", 150)
-                if isinstance(x, (int, float)): session.x = max(0.0, min(368.0, float(x)))
-                if isinstance(y, (int, float)): session.y = max(0.0, min(268.0, float(y)))
-
-                # Notifica abandono dos mods da sala antiga
+                nova = d.get("nova_sala")
+                if not isinstance(nova,str) or nova not in hub.salas_disponiveis(): continue
+                sala_antiga = hub.sala_de(s.sid)
+                x, y = d.get("x",200), d.get("y",150)
+                if isinstance(x,(int,float)): s.x = max(0.0,min(368.0,float(x)))
+                if isinstance(y,(int,float)): s.y = max(0.0,min(268.0,float(y)))
                 if sala_antiga:
                     for mod in MODS_COM_LEAVE:
-                        try: mod.on_leave(websocket, jogadores_p)
+                        try: mod.on_leave(websocket, jp)
                         except Exception: pass
-
-                ok = await hub.mover_para_sala(session.sid, nova_sala)
-                if not ok: continue
-
+                if not await hub.mover_para_sala(s.sid, nova): continue
                 if sala_antiga:
-                    await hub.broadcast(sala_antiga, {"tipo": "jogador_saiu", "id": session.sid})
+                    await hub.broadcast(sala_antiga, {"tipo":"jogador_saiu","id":s.sid})
+                outros = [o.to_dict() for o in await hub.snapshot_sala(nova) if o.sid != s.sid]
+                await s.enviar({"tipo":"lista_jogadores","meu_sid":s.sid,"jogadores":outros})
+                await hub.broadcast(nova, {"tipo":"novo_jogador", **s.to_dict()}, exceto=s.sid)
+                banco.log(s.user_id, s.username, "change_room", nova)
 
-                outros = [s.to_dict() for s in await hub.snapshot_sala(nova_sala)
-                          if s.sid != session.sid]
-                await session.enviar({"tipo": "lista_jogadores", "jogadores": outros})
-                await hub.broadcast(nova_sala,
-                    {"tipo": "novo_jogador", **session.to_dict()},
-                    exceto=session.sid)
-
-                if DB_DISPONIVEL:
-                    _db.log_action(session.user_id, session.username, "change_room", nova_sala)
-
-            # ── CHAT ──────────────────────────────────────────
+            # ═══ CHAT ═══════════════════════════════════════════
             elif tipo == "chat":
-                sala = hub.sala_de(session.sid)
+                sala = hub.sala_de(s.sid)
                 if not sala: continue
-                texto = dados.get("texto", "")
-                if not isinstance(texto, str): continue
+                texto = d.get("texto","")
+                if not isinstance(texto,str): continue
                 texto = texto.strip()[:MAX_CHAT_LEN]
                 if not texto: continue
-                await hub.broadcast(sala, {
-                    "tipo": "chat",
-                    "username": session.username,
-                    "texto": texto,
-                })
+                await hub.broadcast(sala, {"tipo":"chat","username":s.username,"texto":texto})
 
-            # ── DIGITANDO ─────────────────────────────────────
+            # ═══ DIGITANDO ══════════════════════════════════════
             elif tipo == "digitando":
-                sala = hub.sala_de(session.sid)
+                sala = hub.sala_de(s.sid)
                 if not sala: continue
-                estado = dados.get("estado")
-                if not isinstance(estado, bool): continue
-                await hub.broadcast(sala, {
-                    "tipo": "jogador_digitando",
-                    "id": session.sid,
-                    "estado": estado,
-                }, exceto=session.sid)
+                estado = d.get("estado")
+                if not isinstance(estado,bool): continue
+                await hub.broadcast(sala, {"tipo":"jogador_digitando","id":s.sid,"estado":estado}, exceto=s.sid)
 
-            # ── SERVER MODS (compatibilidade legada) ──────────
+            # ═══ SERVER MODS ════════════════════════════════════
             elif tipo in HANDLERS_POR_TIPO:
-                sala = hub.sala_de(session.sid)
-                sala_esp = MOD_SALA.get(tipo)
-                if sala_esp and sala != sala_esp: continue
+                sala = hub.sala_de(s.sid)
+                esp = MOD_SALA.get(tipo)
+                if esp and sala != esp: continue
                 try:
-                    await HANDLERS_POR_TIPO[tipo].handle(
-                        tipo, websocket, dados,
-                        jogadores_p, salas_p, _broadcast_mod,
-                    )
+                    await HANDLERS_POR_TIPO[tipo].handle(tipo, websocket, d, jp, sp, _broadcast_mod)
                 except Exception as e:
                     print(f"[mod:{tipo}] {e}")
 
     except websockets.exceptions.ConnectionClosed:
         pass
     except Exception as e:
-        print(f"[handler] erro inesperado: {e}")
+        print(f"[handler] {e}")
     finally:
         escrita.cancel()
-        sala = hub.sala_de(session.sid)
-
+        sala = hub.sala_de(s.sid)
         for mod in MODS_COM_LEAVE:
-            try: mod.on_leave(websocket, jogadores_p)
+            try: mod.on_leave(websocket, jp)
             except Exception: pass
-
-        await hub.remover(session.sid)
-
+        await hub.remover(s.sid)
         if sala:
-            await hub.broadcast(sala, {
-                "tipo": "debug_event",
-                "categoria": "leave",
-                "mensagem": f"{session.username} saiu.",
-            })
-            await hub.broadcast(sala, {"tipo": "jogador_saiu", "id": session.sid})
-
-        if DB_DISPONIVEL and session.logado:
-            _db.log_action(session.user_id, session.username, "disconnect", sala)
+            await hub.broadcast(sala, {"tipo":"debug_event","categoria":"leave",
+                                       "mensagem":f"{s.username} saiu."})
+            await hub.broadcast(sala, {"tipo":"jogador_saiu","id":s.sid})
+        if s.logado:
+            banco.log(s.user_id, s.username, "disconnect", sala)
 
 
 # ──────────────────────────────────────────────────────────────
-#   SERVIDOR HTTP (porta única em produção)
+#   HTTP ESTÁTICO (porta única em produção)
 # ──────────────────────────────────────────────────────────────
 CONTENT_TYPES = {
-    ".html": "text/html; charset=utf-8",
-    ".js":   "application/javascript",
-    ".json": "application/json",
-    ".css":  "text/css",
-    ".png":  "image/png",
-    ".jpg":  "image/jpeg",
-    ".gif":  "image/gif",
-    ".mp4":  "video/mp4",
-    ".webm": "video/webm",
-    ".mp3":  "audio/mpeg",
-    ".ogg":  "audio/ogg",
-    ".ico":  "image/x-icon",
-    ".wasm": "application/wasm",
-    ".txt":  "text/plain",
+    ".html":"text/html; charset=utf-8", ".js":"application/javascript",
+    ".json":"application/json", ".css":"text/css", ".png":"image/png",
+    ".jpg":"image/jpeg", ".gif":"image/gif", ".mp4":"video/mp4",
+    ".webm":"video/webm", ".mp3":"audio/mpeg", ".ogg":"audio/ogg",
+    ".ico":"image/x-icon", ".wasm":"application/wasm", ".txt":"text/plain",
 }
 SEM_CACHE = {".js", ".json"}
 
-
-def _fazer_process_request():
-    """Cria a função process_request com os contextos necessários."""
-
+def _process_request():
     async def process_request(connection, request):
-        # WebSocket upgrade → deixa o websockets tratar
-        if request.headers.get("Upgrade", "").lower() == "websocket":
+        if request.headers.get("Upgrade","").lower() == "websocket":
             return None
-
-        method   = getattr(request, "method", "GET")
-        url_path = request.path
-
-        # ── API REST ──────────────────────────────────────────
-        if url_path.startswith("/api/") and API_DISPONIVEL:
-            try:
-                result = await handle_api(method, url_path, request)
-                if result is not None:
-                    status, headers, body = result
-                    return Response(status, _http_reason(status), WsHeaders(headers), body)
-            except Exception as e:
-                body = json.dumps({"error": str(e)}).encode()
-                return Response(500, "Internal Server Error",
-                    WsHeaders([("Content-Type", "application/json"), ("Content-Length", str(len(body)))]), body)
-
-        # ── Arquivos estáticos ────────────────────────────────
-        path = url_path.split("?")[0]
+        path = request.path.split("?")[0]
         if path == "/": path = "/index.html"
         file_path = os.path.realpath(os.path.join(PUBLIC_DIR, path.lstrip("/")))
-
-        # Path traversal protection
         if not file_path.startswith(os.path.realpath(PUBLIC_DIR)):
-            body = b"Forbidden"
-            return Response(403, "Forbidden", WsHeaders([("Content-Length", "9")]), body)
-
+            return Response(403, "Forbidden", WsHeaders([("Content-Length","9")]), b"Forbidden")
         if not os.path.isfile(file_path):
-            body = b"Not Found"
-            return Response(404, "Not Found", WsHeaders([("Content-Length", "9")]), body)
-
-        with open(file_path, "rb") as f:
+            return Response(404, "Not Found", WsHeaders([("Content-Length","9")]), b"Not Found")
+        with open(file_path,"rb") as f:
             body = f.read()
-
-        ext     = os.path.splitext(file_path)[1].lower()
-        ct      = CONTENT_TYPES.get(ext, "application/octet-stream")
-        headers = [
-            ("Content-Type", ct),
-            ("Content-Length", str(len(body))),
-            ("X-Content-Type-Options", "nosniff"),
-            ("X-Frame-Options", "DENY"),
-        ]
+        ext = os.path.splitext(file_path)[1].lower()
+        ct = CONTENT_TYPES.get(ext, "application/octet-stream")
+        headers = [("Content-Type",ct),("Content-Length",str(len(body))),
+                   ("X-Content-Type-Options","nosniff")]
         if ext in SEM_CACHE:
-            headers.append(("Cache-Control", "no-cache, no-store, must-revalidate"))
-        if ext == ".wasm":
-            headers.append(("Cross-Origin-Opener-Policy", "same-origin"))
-            headers.append(("Cross-Origin-Embedder-Policy", "require-corp"))
-
+            headers.append(("Cache-Control","no-cache, no-store, must-revalidate"))
         return Response(200, "OK", WsHeaders(headers), body)
-
     return process_request
 
 
-def _http_reason(status: int) -> str:
-    return {200: "OK", 201: "Created", 204: "No Content",
-            400: "Bad Request", 401: "Unauthorized", 403: "Forbidden",
-            404: "Not Found", 409: "Conflict", 500: "Internal Server Error"}.get(status, "Unknown")
-
-
-# ──────────────────────────────────────────────────────────────
-#   HTTP THREAD (dev local apenas)
-# ──────────────────────────────────────────────────────────────
 def rodar_http_background():
-    class Handler(SimpleHTTPRequestHandler):
-        def __init__(self, *a, **kw):
-            super().__init__(*a, directory=PUBLIC_DIR, **kw)
-        def log_message(self, *a): pass
+    class H(SimpleHTTPRequestHandler):
+        def __init__(self,*a,**k): super().__init__(*a, directory=PUBLIC_DIR, **k)
+        def log_message(self,*a): pass
         def end_headers(self):
             p = self.path.split("?")[0]
-            if p.endswith((".js", ".json")):
-                self.send_header("Cache-Control", "no-cache, no-store, must-revalidate")
-            self.send_header("X-Content-Type-Options", "nosniff")
-            if p.endswith(".wasm"):
-                self.send_header("Cross-Origin-Opener-Policy", "same-origin")
-                self.send_header("Cross-Origin-Embedder-Policy", "require-corp")
+            if p.endswith((".js",".json")):
+                self.send_header("Cache-Control","no-cache, no-store, must-revalidate")
+            self.send_header("X-Content-Type-Options","nosniff")
             super().end_headers()
-
-    class Server(ThreadingTCPServer):
-        allow_reuse_address = True
-        daemon_threads = True
-        def handle_error(self, *a): pass
-
+    class S(ThreadingTCPServer):
+        allow_reuse_address = True; daemon_threads = True
+        def handle_error(self,*a): pass
     try:
-        with Server(("", PORT_HTTP), Handler) as s:
-            s.serve_forever()
+        with S(("", PORT_HTTP), H) as srv:
+            srv.serve_forever()
     except Exception: pass
 
 
 def _ip_local():
     s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
-    try:
-        s.connect(("8.8.8.8", 80)); return s.getsockname()[0]
+    try: s.connect(("8.8.8.8",80)); return s.getsockname()[0]
     except Exception: return "127.0.0.1"
     finally: s.close()
 
@@ -696,26 +802,16 @@ def _ip_local():
 #   MAIN
 # ──────────────────────────────────────────────────────────────
 async def main():
-    global DB_DISPONIVEL
+    await banco.conectar()  # tenta conectar; se falhar, segue sem banco
 
-    # Banco de dados — testa conexão antes de confirmar
-    if DB_DISPONIVEL:
-        try:
-            await _db.init_db()
-            asyncio.create_task(_db._log_writer())
-        except Exception as e:
-            print(f"[db] PostgreSQL indisponível: {e}")
-            DB_DISPONIVEL = False  # desativa pra não tentar mais
-
-    hub = RoomHub(MANIFEST.get("salas", []))
+    hub = Hub(MANIFEST.get("salas", []))
     carregar_server_mods()
 
-    print("=" * 65)
-    print("        SALA 33 — SERVER v2")
-    print("=" * 65)
+    print("="*65)
+    print("        SALA 33 — SERVER v2.1")
+    print("="*65)
     print(f"» Modo:    {'PRODUÇÃO (porta única)' if MODO_PRODUCAO else 'LOCAL (duas portas)'}")
-    print(f"» Banco:   {'PostgreSQL ativo' if DB_DISPONIVEL else 'desabilitado (sem asyncpg)'}")
-    print(f"» API:     {'ativa em /api/*' if API_DISPONIVEL else 'desabilitada'}")
+    print(f"» Banco:   {'PostgreSQL ✓' if banco.ativo else 'sem banco (só convidado)'}")
     print(f"» Salas:   {', '.join(hub.salas_disponiveis())}")
     print(f"» Sprites: {', '.join(sorted(SPRITES_VALIDOS))}")
     if not MODO_PRODUCAO:
@@ -724,34 +820,22 @@ async def main():
         print(f"» WS:      ws://{ip}:{PORT_WS}")
     else:
         print(f"» Porta:   {PORT_WS}")
-    print("=" * 65)
+    print("="*65)
 
     asyncio.create_task(loop_minigames(hub))
+    ws_kwargs = dict(max_size=MAX_MSG_BYTES, max_queue=64, ping_interval=30, ping_timeout=10)
 
-    ws_kwargs = dict(
-        max_size=MAX_MSG_BYTES,
-        max_queue=64,
-        ping_interval=30,
-        ping_timeout=10,
-    )
-
-    def _make_handler(h):
+    def mk(h):
         async def _h(ws): await handler_ws(ws, h)
         return _h
 
     if MODO_PRODUCAO:
-        async with websockets.serve(
-            _make_handler(hub), "0.0.0.0", PORT_WS,
-            process_request=_fazer_process_request(),
-            **ws_kwargs,
-        ):
+        async with websockets.serve(mk(hub), "0.0.0.0", PORT_WS,
+                                    process_request=_process_request(), **ws_kwargs):
             await asyncio.Future()
     else:
         threading.Thread(target=rodar_http_background, daemon=True).start()
-        async with websockets.serve(
-            _make_handler(hub), "0.0.0.0", PORT_WS,
-            **ws_kwargs,
-        ):
+        async with websockets.serve(mk(hub), "0.0.0.0", PORT_WS, **ws_kwargs):
             await asyncio.Future()
 
 
