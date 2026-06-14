@@ -362,13 +362,14 @@ class Sessao:
         self.ws       = ws
         self.queue    = asyncio.Queue(maxsize=64)
         self.last_move = 0.0
+        self.x        = 200.0
+        self.y        = 150.0
         self.last_broadcast_x = self.x
         self.last_broadcast_y = self.y
         self.user_id  = None
         self.username = "ANÔNIMO"
         self.sala     = None
-        self.x        = 200.0
-        self.y        = 150.0
+        
         self.sprite_id = "cinzaguy"
         self.lado     = "direita"
         self.logado   = False
@@ -549,7 +550,13 @@ async def escritor(s):
         pass
 
 async def handler_ws(websocket, hub):
-    s = Sessao(websocket)
+
+    try:
+        s = Sessao(websocket)
+    except Exception as e:
+        print("[SESSAO]", repr(e))
+        raise
+
     await hub.registrar(s)
     rate = RateLimiter()
     escrita = asyncio.create_task(escritor(s))
