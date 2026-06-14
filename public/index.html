@@ -256,6 +256,48 @@
             footer, [style*='position: fixed'][style*='right'] { display: none !important; }
             #configMenu { display: none !important; }
         }
+        /* Abas de autenticação */
+        #authTabs {
+            display: flex;
+            gap: 4px;
+            margin-bottom: 16px;
+        }
+        .auth-tab {
+            flex: 1;
+            padding: 8px 4px;
+            background: #1a1a1a;
+            color: #777;
+            border: 2px solid #333;
+            font-family: 'Courier New', monospace;
+            font-size: 9px;
+            font-weight: bold;
+            letter-spacing: 1px;
+            cursor: pointer;
+            box-shadow: none;
+            width: auto;
+        }
+        .auth-tab:hover { color: #aaa; border-color: #555; background: #1a1a1a; }
+        .auth-tab.ativa { color: #0d0d0d; background: #fff; border-color: #fff; }
+
+        /* Mensagem de auth */
+        #authMsg {
+            display: none;
+            font-size: 10px;
+            letter-spacing: 1px;
+            padding: 8px;
+            margin-bottom: 12px;
+            text-align: left;
+        }
+        #authMsg.erro { display: block; background: #2a1010; color: #ff6666; border: 1px solid #ff6666; }
+        #authMsg.ok   { display: block; background: #102a10; color: #66ff88; border: 1px solid #66ff88; }
+
+        input[type="password"] {
+            width: 100%; padding: 10px; background: #222222; color: #ffffff;
+            border: 2px solid #555555; font-family: 'Courier New', monospace;
+            text-align: center; font-size: 14px; outline: none; margin-bottom: 15px;
+        }
+        input[type="password"]:focus { border-color: #ffffff; }
+
     </style>
 </head>
 <body>
@@ -263,9 +305,26 @@
     <div id="menu">
         <h2>SALA 33</h2>
         <p>CONEXÃO LOCAL // PROTOCOLO WS</p>
-        
+
+        <!-- Abas -->
+        <div id="authTabs">
+            <button type="button" class="auth-tab ativa" data-modo="convidado" onclick="trocarAba('convidado')">CONVIDADO</button>
+            <button type="button" class="auth-tab" data-modo="entrar" onclick="trocarAba('entrar')">ENTRAR</button>
+            <button type="button" class="auth-tab" data-modo="criar" onclick="trocarAba('criar')">CRIAR CONTA</button>
+        </div>
+
+        <!-- Mensagem de erro/sucesso -->
+        <div id="authMsg"></div>
+
+        <!-- Campos de conta (login/registro) -->
+        <div id="contaFields" style="display:none;">
+            <input type="text" id="contaUser" placeholder="USUÁRIO" maxlength="16" autocomplete="username">
+            <input type="password" id="contaPass" placeholder="SENHA" maxlength="64" autocomplete="current-password">
+        </div>
+
+        <!-- Nome do convidado -->
         <input type="text" id="username" placeholder="NOME DO BICHO" maxlength="16">
-        
+
         <div class="selector-container">
             <div class="selector-fields">
                 <label>PERSONAGEM (32x32):</label>
@@ -278,7 +337,7 @@
             </div>
         </div>
 
-        <button id="btnEntrar" onclick="conectar()">ENTRAR</button>
+        <button id="btnEntrar" onclick="acaoMenu()">ENTRAR</button>
     </div>
 
     <div id="gameUI">

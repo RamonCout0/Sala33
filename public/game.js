@@ -435,41 +435,148 @@ function enviarEmote(emote) {
 window.enviarEmote = enviarEmote;
 
 // =====================================================
+//   AUTENTICAÇÃO / CONTAS
+//   Abas no menu: convidado | entrar | criar conta.
+//   Auth acontece via WebSocket (registrar / autenticar).
+// =====================================================
+let modoAuth = "convidado";          // convidado | entrar | criar
+let tokenConta = null;               // JWT salvo após login/registro
+let wsAuth = null;                   // socket temporário só pra auth
+
+function _authMsg(texto, tipo) {
+    const el = document.getElementById("authMsg");
+    if (!el) return;
+    el.textContent = texto;
+    el.className = tipo || "";
+    if (!texto) el.className = "";
+}
+
+function trocarAba(modo) {
+    modoAuth = modo;
+    _authMsg("", "");
+    document.querySelectorAll(".auth-tab").forEach(t => {
+        t.classList.toggle("ativa", t.dataset.modo === modo);
+    });
+    const contaFields = document.getElementById("contaFields");
+    const guestField  = document.getElementById("username");
+    const btn         = document.getElementById("btnEntrar");
+    if (modo === "convidado") {
+        contaFields.style.display = "none";
+        guestField.style.display = "block";
+        btn.textContent = "ENTRAR";
+    } else if (modo === "entrar") {
+        contaFields.style.display = "block";
+        guestField.style.display = "none";
+        btn.textContent = "ENTRAR COM CONTA";
+    } else {
+        contaFields.style.display = "block";
+        guestField.style.display = "none";
+        btn.textContent = "CRIAR E ENTRAR";
+    }
+}
+window.trocarAba = trocarAba;
+
+// URL do WebSocket (mesma lógica usada no jogo)
+function _wsUrl() {
+    const proto = location.protocol === "https:" ? "wss:" : "ws:";
+    const isLocal = location.hostname === "localhost" || location.hostname === "127.0.0.1"
+        || location.hostname.startsWith("192.168.") || location.hostname.startsWith("10.");
+    return isLocal ? `ws://${location.hostname}:8080` : `${proto}//${location.host}`;
+}
+
+// Roteador do botão ENTRAR conforme a aba ativa
+function acaoMenu() {
+    if (modoAuth === "convidado") {
+        conectar();
+    } else {
+        autenticarOuCriar(modoAuth === "criar" ? "registrar" : "autenticar");
+    }
+}
+window.acaoMenu = acaoMenu;
+
+// Faz registro OU login via WebSocket dedicado, salva token e entra no jogo
+function autenticarOuCriar(tipo) {
+    const username = document.getElementById("contaUser").value.trim().toUpperCase();
+    const password = document.getElementById("contaPass").value;
+    if (username.length < 3) return _authMsg("Usuário precisa de 3+ caracteres.", "erro");
+    if (password.length < 6) return _authMsg("Senha precisa de 6+ caracteres.", "erro");
+    if (!Object.keys(MAPAS).length) return _authMsg("Configs carregando, aguarde...", "erro");
+
+    const btn = document.getElementById("btnEntrar");
+    btn.disabled = true;
+    btn.textContent = tipo === "registrar" ? "CRIANDO..." : "ENTRANDO...";
+    _authMsg("", "");
+
+    // Abre um socket dedicado só pra auth
+    wsAuth = new WebSocket(_wsUrl());
+
+    wsAuth.onopen = () => {
+        wsAuth.send(JSON.stringify({ tipo, username, password }));
+    };
+
+    wsAuth.onmessage = (event) => {
+        let dados;
+        try { dados = JSON.parse(event.data); } catch { return; }
+
+        if (dados.tipo === "auth_ok") {
+            tokenConta = dados.token;
+            localStorage.setItem("sala33_token", tokenConta);
+            meuBicho.username = dados.user.username;
+            meuBicho.spriteId = dados.user.sprite_id || "cinzaguy";
+            wsAuth.close(); wsAuth = null;
+            btn.disabled = false;
+            // Entra no jogo usando o token
+            conectar({ token: tokenConta });
+        }
+        else if (dados.tipo === "auth_erro") {
+            _authMsg(dados.mensagem || "Falha na autenticação.", "erro");
+            wsAuth.close(); wsAuth = null;
+            btn.disabled = false;
+            btn.textContent = tipo === "registrar" ? "CRIAR E ENTRAR" : "ENTRAR COM CONTA";
+        }
+    };
+
+    wsAuth.onerror = () => {
+        _authMsg("Erro de conexão com o servidor.", "erro");
+        btn.disabled = false;
+        btn.textContent = tipo === "registrar" ? "CRIAR E ENTRAR" : "ENTRAR COM CONTA";
+    };
+}
+window.autenticarOuCriar = autenticarOuCriar;
+
+// =====================================================
 //   CONEXÃO WEBSOCKET
 // =====================================================
-function conectar() {
-    const user = document.getElementById("username").value;
-    const skin = document.getElementById("spriteSelect").value;
-    if (!user) return alert("Digite um nome!");
-    if (!Object.keys(MAPAS).length) return alert("Configs ainda não carregaram. Recarregue a página.");
+function conectar(opts = {}) {
+    const token = opts.token || null;
 
-    meuBicho.username = user.toUpperCase().trim();
-    meuBicho.spriteId = skin;
-    localStorage.setItem("sala33_username", meuBicho.username);
-    localStorage.setItem("sala33_spriteId", skin);
+    if (token) {
+        // Login por conta: username/sprite já vieram do auth_ok
+        if (!meuBicho.username) return _authMsg("Erro: sessão sem usuário.", "erro");
+    } else {
+        // Login convidado: lê os campos do menu
+        const user = document.getElementById("username").value;
+        const skin = document.getElementById("spriteSelect").value;
+        if (!user) return alert("Digite um nome!");
+        if (!Object.keys(MAPAS).length) return alert("Configs ainda não carregaram. Recarregue a página.");
+        meuBicho.username = user.toUpperCase().trim();
+        meuBicho.spriteId = skin;
+        localStorage.setItem("sala33_username", meuBicho.username);
+        localStorage.setItem("sala33_spriteId", skin);
+    }
 
     document.getElementById("menu").style.display = "none";
     document.getElementById("gameUI").style.display = "flex";
 
     tocarMusica(SALA_INICIAL);
 
-    const proto = location.protocol === "https:" ? "wss:" : "ws:";
-    const isLocal = location.hostname === "localhost" || location.hostname === "127.0.0.1"
-        || location.hostname.startsWith("192.168.") || location.hostname.startsWith("10.");
-    // Produção: conecta na raiz (servidor aceita WS em qualquer path)
-    // Local: porta 8080 direto
-    const wsUrl = isLocal
-        ? `ws://${location.hostname}:8080`
-        : `${proto}//${location.host}`;  // raiz, sem /ws
-    ws = new WebSocket(wsUrl);
+    ws = new WebSocket(_wsUrl());
 
     ws.onopen = () => {
-        ws.send(JSON.stringify({
-            tipo: "login",
-            username: meuBicho.username,
-            spriteId: meuBicho.spriteId,
-            lado: meuBicho.lado,
-        }));
+        const payloadLogin = token
+            ? { tipo: "login", token, spriteId: meuBicho.spriteId, lado: meuBicho.lado }
+            : { tipo: "login", username: meuBicho.username, spriteId: meuBicho.spriteId, lado: meuBicho.lado };
+        ws.send(JSON.stringify(payloadLogin));
         legendaTimer = 180;
         precarregarAudios();
         setupMobileControls();
@@ -501,6 +608,11 @@ function conectar() {
         else if (dados.tipo === "lista_jogadores") {
             // O servidor envia nosso próprio sid na primeira lista
             if (dados.meu_sid) meuSid = dados.meu_sid;
+            // Conta logada? guarda amigos/favoritos pra UI futura
+            if (dados.conta) {
+                window.SALA33_CONTA = { amigos: dados.amigos || [], favoritos: dados.favoritos || [] };
+                registrarDebug("info", `» Logado como conta (${meuBicho.username}).`);
+            }
             dados.jogadores.forEach(p => {
                 if (p.id !== meuSid) {
                     p.chatTexto = ""; p.chatTimer = 0; p.isTyping = false;
