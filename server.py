@@ -319,6 +319,8 @@ MAX_CHAT_LEN     = 200
 MAX_USERNAME_LEN = 16
 RATE_LIMIT_MSGS  = 30
 RATE_LIMIT_WIN   = 1.0
+MOVE_RATE_LIMIT = 0.05
+MOVE_EPSILON = 0.50
 USERNAME_RE      = re.compile(r"^[A-Za-z0-9_\- ]+$")
 LADOS_VALIDOS    = {"esquerda", "direita"}
 
@@ -333,12 +335,35 @@ def _sanitize_username(v):
 #   STATE AUTHORITATIVE
 # ──────────────────────────────────────────────────────────────
 class Sessao:
-    __slots__ = ("sid","ws","queue","user_id","username","sala",
-                 "x","y","sprite_id","lado","logado")
+    __slots__ = (
+        "sid",
+        "ws",
+        "queue",
+        "user_id",
+        "username",
+        "sala",
+        "x",
+        "y",
+        "sprite_id",
+        "lado",
+        "logado",
+
+        # otimizações de movimento
+        "last_move",
+        "last_broadcast_x",
+        "last_broadcast_y",
+    )
+
+
+
+
     def __init__(self, ws):
         self.sid      = str(uuid.uuid4())
         self.ws       = ws
-        self.queue    = asyncio.Queue(maxsize=256)
+        self.queue    = asyncio.Queue(maxsize=64)
+        self.last_move = 0.0
+        self.last_broadcast_x = self.x
+        self.last_broadcast_y = self.y
         self.user_id  = None
         self.username = "ANÔNIMO"
         self.sala     = None
@@ -410,8 +435,11 @@ class Hub:
         async with self._lock:
             destinos = [self._sessions[sid] for sid in self._salas.get(sala_id, set())
                         if sid in self._sessions and sid != exceto]
-        for s in destinos:
-            await s.enviar(payload)
+        if destinos:
+            await asyncio.gather(
+                *(s.enviar(payload) for s in destinos),
+                return_exceptions=True
+            )
 
 
 # ──────────────────────────────────────────────────────────────
@@ -660,15 +688,58 @@ async def handler_ws(websocket, hub):
 
             # ═══ MOVER ══════════════════════════════════════════
             if tipo == "mover":
+
                 sala = hub.sala_de(s.sid)
-                if not sala: continue
-                x, y = d.get("x"), d.get("y")
-                if not isinstance(x,(int,float)) or not isinstance(y,(int,float)): continue
-                s.x = max(0.0, min(368.0, float(x)))
-                s.y = max(0.0, min(268.0, float(y)))
+
+                if not sala:
+                    continue
+
+                agora = time.monotonic()
+
+                # limite de 20 updates por segundo
+                if agora - s.last_move < MOVE_RATE_LIMIT:
+                    continue
+
+                s.last_move = agora
+
+                x = d.get("x")
+                y = d.get("y")
+
+                if not isinstance(x, (int, float)):
+                    continue
+
+                if not isinstance(y, (int, float)):
+                    continue
+
+                novo_x = max(0.0, min(368.0, float(x)))
+                novo_y = max(0.0, min(268.0, float(y)))
+
+                s.x = novo_x
+                s.y = novo_y
+
                 s.lado = _lado(d.get("lado", s.lado))
-                await hub.broadcast(sala, {"tipo":"movimento","id":s.sid,
-                    "x":s.x,"y":s.y,"lado":s.lado}, exceto=s.sid)
+
+                dx = abs(s.x - s.last_broadcast_x)
+                dy = abs(s.y - s.last_broadcast_y)
+
+                # ignora micro movimentos
+                if dx < MOVE_EPSILON and dy < MOVE_EPSILON:
+                    continue
+
+                s.last_broadcast_x = s.x
+                s.last_broadcast_y = s.y
+
+                await hub.broadcast(
+                    sala,
+                    {
+                        "tipo": "movimento",
+                        "id": s.sid,
+                        "x": s.x,
+                        "y": s.y,
+                        "lado": s.lado
+                    },
+                    exceto=s.sid
+                )
 
             # ═══ MUDAR SALA ═════════════════════════════════════
             elif tipo == "mudar_sala":

@@ -618,6 +618,8 @@ function conectar(opts = {}) {
                     p.chatTexto = ""; p.chatTimer = 0; p.isTyping = false;
                     p.lado = p.lado || "direita";
                     p.animTick = 0; p.movimentoTimer = 0;
+                    p.targetX = p.x;
+                    p.targetY = p.y;
                     outrosJogadores[p.id] = p;
                 }
             });
@@ -626,8 +628,8 @@ function conectar(opts = {}) {
             if (outrosJogadores[dados.id]) {
                 if (dados.x > outrosJogadores[dados.id].x) outrosJogadores[dados.id].lado = "direita";
                 else if (dados.x < outrosJogadores[dados.id].x) outrosJogadores[dados.id].lado = "esquerda";
-                outrosJogadores[dados.id].x = dados.x;
-                outrosJogadores[dados.id].y = dados.y;
+                outrosJogadores[dados.id].targetX = dados.x;
+                outrosJogadores[dados.id].targetY = dados.y;
                 outrosJogadores[dados.id].movimentoTimer = 6;
             }
         }
@@ -1051,6 +1053,8 @@ function desenhar() {
     // Outros jogadores
     for (const id in outrosJogadores) {
         const p = outrosJogadores[id];
+        j.x = (j.targetX - j.x) * 0.20;
+        j.x = (j.targetY - j.y) * 0.20;
         const bobeio = p.animTick > 0 ? Math.abs(Math.sin(p.animTick)) * -5 : 0;
         const img = imagensSprites[p.spriteId];
         if (img?.complete && img.naturalWidth !== 0) {
