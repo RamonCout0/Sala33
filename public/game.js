@@ -1053,8 +1053,8 @@ function desenhar() {
     // Outros jogadores
     for (const id in outrosJogadores) {
         const p = outrosJogadores[id];
-        j.x = (j.targetX - j.x) * 0.20;
-        j.x = (j.targetY - j.y) * 0.20;
+        p.x += (p.targetX - p.x) * 0.20;
+        p.y += (p.targetY - p.y) * 0.20;
         const bobeio = p.animTick > 0 ? Math.abs(Math.sin(p.animTick)) * -5 : 0;
         const img = imagensSprites[p.spriteId];
         if (img?.complete && img.naturalWidth !== 0) {
