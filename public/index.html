@@ -404,7 +404,82 @@
         .social-btn-acao.remove:hover { color: #ff6666; border-color: #ff6666; }
         .social-vazio { font-size: 10px; color: #444; font-style: italic; padding: 6px 0; }
 
+        /* Pedidos de amizade */
+        .pedido-item {
+            display: flex; justify-content: space-between; align-items: center;
+            padding: 8px 10px; margin-bottom: 5px;
+            background: #1a1810; border: 1px solid #4a3d1a;
+            font-size: 11px; color: #ffd24a; letter-spacing: 1px;
+        }
+        .pedido-acoes { display: flex; gap: 4px; }
+        .pedido-btn {
+            width: auto; padding: 3px 7px; font-size: 11px;
+            box-shadow: none; cursor: pointer;
+            font-family: 'Courier New', monospace; font-weight: bold;
+        }
+        .pedido-aceitar { background: #144a20; color: #66ff88; border: 1px solid #2a7a40; }
+        .pedido-aceitar:hover { background: #1a6028; }
+        .pedido-recusar { background: transparent; color: #888; border: 1px solid #444; }
+        .pedido-recusar:hover { color: #ff6666; border-color: #ff6666; }
+
+        /* Botões de ação do amigo (TP + PV) */
+        .amigo-acoes { display: flex; gap: 4px; align-items: center; }
+        .amigo-btn-tp, .amigo-btn-pv {
+            width: auto; padding: 3px 7px; font-size: 10px;
+            background: transparent; border: 1px solid #333; color: #888;
+            box-shadow: none; cursor: pointer;
+            font-family: 'Courier New', monospace; letter-spacing: 1px;
+        }
+        .amigo-btn-tp:hover:not(:disabled) { color: #66ccff; border-color: #66ccff; }
+        .amigo-btn-pv:hover { color: #fff; border-color: #fff; }
+        .amigo-btn-tp:disabled { opacity: 0.3; cursor: not-allowed; }
+
+        /* ===== CHAT PRIVADO (PV) ===== */
+        #pvPanel {
+            display: none;
+            position: fixed;
+            top: 0; left: 0;
+            width: 280px; max-width: 85vw; height: 100vh;
+            background: #0f0f0f;
+            border-right: 2px solid #555;
+            z-index: 250;
+            padding: 16px;
+            flex-direction: column;
+            box-shadow: 6px 0 24px rgba(0,0,0,0.8);
+        }
+        #pvPanel.aberto { display: flex; }
+        #pvHeader {
+            display: flex; justify-content: space-between; align-items: center;
+            border-bottom: 1px solid #333; padding-bottom: 10px; margin-bottom: 12px;
+            font-size: 12px; letter-spacing: 2px; color: #66ccff;
+        }
+        #pvBox {
+            flex: 1; overflow-y: auto;
+            background: #161616; border: 1px solid #2a2a2a;
+            padding: 8px 10px; font-size: 12px; line-height: 1.6;
+            color: #ccc; margin-bottom: 10px;
+        }
+        .pv-msg { margin-bottom: 4px; word-wrap: break-word; }
+        .pv-msg .pv-de { color: #66ccff; font-weight: bold; }
+        .pv-msg.eu .pv-de { color: #fff; }
+        .pv-msg .pv-hora { color: #444; font-size: 9px; margin-right: 5px; }
+        .pv-sistema { color: #666; font-style: italic; font-size: 10px; }
+        #pvInputRow { display: flex; gap: 6px; }
+        #pvInput {
+            flex: 1; padding: 8px; margin-bottom: 0;
+            background: #1a1a1a; color: #fff;
+            border: 2px solid #444; text-align: left;
+            font-family: 'Courier New', monospace; font-size: 13px; outline: none;
+        }
+        #pvInput:focus { border-color: #66ccff; }
+        #pvInputRow button {
+            width: 44px; padding: 0; font-size: 16px;
+            background: #66ccff; color: #000; border: none;
+            cursor: pointer; box-shadow: none;
+        }
+
         @media (max-width: 850px) {
+            #pvPanel { width: 100vw; max-width: 100vw; }
             #btnSocialToggle { top: 6px; right: 6px; padding: 6px 10px; font-size: 9px; }
         }
 
@@ -504,6 +579,12 @@
             <button id="btnFavSala" onclick="toggleFavoritoSalaAtual()">☆ FAVORITAR ESTA SALA</button>
         </div>
 
+        <!-- Pedidos de amizade recebidos -->
+        <div class="social-secao" id="secaoPedidos" style="display:none;">
+            <div class="social-titulo">PEDIDOS DE AMIZADE (<span id="pedidosCount">0</span>)</div>
+            <div id="listaPedidos"></div>
+        </div>
+
         <!-- Adicionar amigo -->
         <div class="social-secao">
             <div class="social-titulo">ADICIONAR AMIGO</div>
@@ -524,6 +605,19 @@
         <div class="social-secao">
             <div class="social-titulo">SALAS FAVORITAS</div>
             <div id="listaFavoritos"></div>
+        </div>
+    </div>
+
+    <!-- ===== CHAT PRIVADO (PV) — painel à esquerda ===== -->
+    <div id="pvPanel">
+        <div id="pvHeader">
+            <span id="pvTitulo">// PV</span>
+            <button onclick="fecharPV()" class="social-close">&#10005;</button>
+        </div>
+        <div id="pvBox"></div>
+        <div id="pvInputRow">
+            <input type="text" id="pvInput" placeholder="Mensagem privada..." maxlength="200">
+            <button onclick="enviarPV()">➤</button>
         </div>
     </div>
 

@@ -529,6 +529,7 @@ function autenticarOuCriar(tipo) {
             localStorage.setItem("sala33_token", tokenConta);
             meuBicho.username = dados.user.username;
             meuBicho.spriteId = dados.user.sprite_id || "cinzaguy";
+            meuUserId = dados.user.id;
             wsAuth.close(); wsAuth = null;
             btn.disabled = false;
             // Entra no jogo usando o token
@@ -551,18 +552,25 @@ function autenticarOuCriar(tipo) {
 window.autenticarOuCriar = autenticarOuCriar;
 
 // =====================================================
-//   PAINEL SOCIAL (amigos + favoritos)
+//   PAINEL SOCIAL (amigos + favoritos + pedidos + PV)
 // =====================================================
 let contaAtiva = false;            // logado com conta?
+let meuUserId = null;              // meu id de usuário (conta)
 let meusAmigos = [];               // [{id, username, sprite_id}]
 let meusFavoritos = [];            // ["the_hub", ...]
+let meusPedidos = [];              // pedidos recebidos [{id, username, sprite_id}]
+let amigosOnline = new Set();      // ids de amigos online agora
+
+// Estado do chat privado
+let pvAtual = null;                // {id, username} do amigo com quem converso
+const pvHistorico = {};            // { friendId: [ {de, texto, ts, eu} ] }
 
 function toggleSocial() {
     const painel = document.getElementById("socialPanel");
     if (!painel) return;
     painel.classList.toggle("aberto");
     if (painel.classList.contains("aberto")) {
-        // Pede lista atualizada ao abrir
+        // Pede lista atualizada ao abrir (traz status online + pedidos)
         if (ws?.readyState === WebSocket.OPEN && contaAtiva) {
             ws.send(JSON.stringify({ tipo: "listar_amigos" }));
         }
@@ -591,12 +599,34 @@ function adicionarAmigo() {
 }
 window.adicionarAmigo = adicionarAmigo;
 
+function aceitarPedido(fromId) {
+    if (ws?.readyState === WebSocket.OPEN)
+        ws.send(JSON.stringify({ tipo: "aceitar_pedido", from_id: fromId }));
+}
+window.aceitarPedido = aceitarPedido;
+
+function recusarPedido(fromId) {
+    if (ws?.readyState === WebSocket.OPEN)
+        ws.send(JSON.stringify({ tipo: "recusar_pedido", from_id: fromId }));
+    // Remove localmente na hora
+    meusPedidos = meusPedidos.filter(p => p.id !== fromId);
+    renderizarSocial();
+}
+window.recusarPedido = recusarPedido;
+
 function removerAmigo(friendId) {
     if (ws?.readyState === WebSocket.OPEN) {
         ws.send(JSON.stringify({ tipo: "remover_amigo", friend_id: friendId }));
     }
 }
 window.removerAmigo = removerAmigo;
+
+function tpAmigo(friendId) {
+    if (ws?.readyState === WebSocket.OPEN) {
+        ws.send(JSON.stringify({ tipo: "tp_amigo", friend_id: friendId }));
+    }
+}
+window.tpAmigo = tpAmigo;
 
 function toggleFavoritoSalaAtual() {
     if (ws?.readyState === WebSocket.OPEN) {
@@ -605,13 +635,85 @@ function toggleFavoritoSalaAtual() {
 }
 window.toggleFavoritoSalaAtual = toggleFavoritoSalaAtual;
 
-// Verifica se um amigo está online na minha sala atual (pela lista de jogadores)
-function _amigoEstaOnline(username) {
-    if (username === meuBicho.username) return true;
+// Amigo online: ou está na lista de amigosOnline (servidor) ou na minha sala
+function _amigoEstaOnline(amigo) {
+    if (amigosOnline.has(amigo.id)) return true;
     for (const id in outrosJogadores) {
-        if (outrosJogadores[id].username === username) return true;
+        if (outrosJogadores[id].username === amigo.username) return true;
     }
     return false;
+}
+
+// ---------- CHAT PRIVADO (PV) ----------
+function abrirPV(friendId, friendName) {
+    pvAtual = { id: friendId, username: friendName };
+    if (!pvHistorico[friendId]) pvHistorico[friendId] = [];
+    const painel = document.getElementById("pvPanel");
+    const titulo = document.getElementById("pvTitulo");
+    if (titulo) titulo.textContent = `// PV: ${friendName}`;
+    if (painel) painel.classList.add("aberto");
+    renderizarPV();
+    setTimeout(() => document.getElementById("pvInput")?.focus(), 80);
+}
+window.abrirPV = abrirPV;
+
+function fecharPV() {
+    document.getElementById("pvPanel")?.classList.remove("aberto");
+    pvAtual = null;
+}
+window.fecharPV = fecharPV;
+
+function enviarPV() {
+    const input = document.getElementById("pvInput");
+    if (!input || !pvAtual) return;
+    const texto = input.value.trim();
+    if (!texto) return;
+    if (ws?.readyState === WebSocket.OPEN) {
+        ws.send(JSON.stringify({ tipo: "pv", friend_id: pvAtual.id, texto: traduzirEmotes(texto) }));
+        input.value = "";
+    }
+}
+window.enviarPV = enviarPV;
+
+function _registrarPV(friendId, de, texto, eu) {
+    if (!pvHistorico[friendId]) pvHistorico[friendId] = [];
+    pvHistorico[friendId].push({ de, texto, ts: horaAtualBrasil(), eu });
+    if (pvHistorico[friendId].length > 100) pvHistorico[friendId].shift();
+    // Se o PV está aberto com esse amigo, re-renderiza
+    if (pvAtual && pvAtual.id === friendId) renderizarPV();
+}
+
+function renderizarPV() {
+    const box = document.getElementById("pvBox");
+    if (!box || !pvAtual) return;
+    const hist = pvHistorico[pvAtual.id] || [];
+    box.innerHTML = "";
+    if (hist.length === 0) {
+        const vazio = document.createElement("div");
+        vazio.className = "pv-sistema";
+        vazio.textContent = `Início da conversa com ${pvAtual.username}.`;
+        box.appendChild(vazio);
+    } else {
+        hist.forEach(m => {
+            const div = document.createElement("div");
+            div.className = "pv-msg" + (m.eu ? " eu" : "");
+            const hora = document.createElement("span");
+            hora.className = "pv-hora";
+            hora.textContent = m.ts;
+            const de = document.createElement("span");
+            de.className = "pv-de";
+            de.textContent = (m.eu ? "você" : m.de) + ": ";
+            div.appendChild(hora);
+            div.appendChild(de);
+            div.appendChild(document.createTextNode(m.texto));
+            if (window.twemoji) {
+                twemoji.parse(div, { base: "https://cdn.jsdelivr.net/gh/twitter/twemoji@14.0.2/assets/", folder: "72x72", ext: ".png" });
+                _aplicarGrayscaleEmojis(div);
+            }
+            box.appendChild(div);
+        });
+    }
+    box.scrollTop = box.scrollHeight;
 }
 
 function renderizarSocial() {
@@ -625,6 +727,39 @@ function renderizarSocial() {
             : `☆ FAVORITAR ESTA SALA`;
     }
 
+    // Pedidos de amizade recebidos
+    const secaoPedidos = document.getElementById("secaoPedidos");
+    const listaPedidos = document.getElementById("listaPedidos");
+    const pedidosCount = document.getElementById("pedidosCount");
+    if (pedidosCount) pedidosCount.textContent = meusPedidos.length;
+    if (secaoPedidos) secaoPedidos.style.display = meusPedidos.length > 0 ? "block" : "none";
+    if (listaPedidos) {
+        listaPedidos.innerHTML = "";
+        meusPedidos.forEach(p => {
+            const item = document.createElement("div");
+            item.className = "pedido-item";
+            const nome = document.createElement("span");
+            nome.textContent = p.username;
+            const acoes = document.createElement("div");
+            acoes.className = "pedido-acoes";
+            const aceitar = document.createElement("button");
+            aceitar.className = "pedido-btn pedido-aceitar";
+            aceitar.textContent = "✓";
+            aceitar.title = "Aceitar";
+            aceitar.onclick = () => aceitarPedido(p.id);
+            const recusar = document.createElement("button");
+            recusar.className = "pedido-btn pedido-recusar";
+            recusar.textContent = "×";
+            recusar.title = "Recusar";
+            recusar.onclick = () => recusarPedido(p.id);
+            acoes.appendChild(aceitar);
+            acoes.appendChild(recusar);
+            item.appendChild(nome);
+            item.appendChild(acoes);
+            listaPedidos.appendChild(item);
+        });
+    }
+
     // Lista de amigos
     const lista = document.getElementById("listaAmigos");
     const count = document.getElementById("amigosCount");
@@ -635,22 +770,47 @@ function renderizarSocial() {
         } else {
             lista.innerHTML = "";
             meusAmigos.forEach(a => {
-                const online = _amigoEstaOnline(a.username);
+                const online = _amigoEstaOnline(a);
                 const item = document.createElement("div");
                 item.className = "amigo-item";
+
                 const nome = document.createElement("div");
                 nome.className = "nome";
                 const dot = document.createElement("span");
                 dot.className = online ? "amigo-online" : "amigo-offline";
                 nome.appendChild(dot);
                 nome.appendChild(document.createTextNode(a.username));
-                const btn = document.createElement("button");
-                btn.className = "social-btn-acao remove";
-                btn.textContent = "×";
-                btn.title = "Remover amigo";
-                btn.onclick = () => removerAmigo(a.id);
+
+                const acoes = document.createElement("div");
+                acoes.className = "amigo-acoes";
+
+                // Botão TP (só ativo se online)
+                const btnTp = document.createElement("button");
+                btnTp.className = "amigo-btn-tp";
+                btnTp.textContent = "TP";
+                btnTp.title = online ? `Teleportar até ${a.username}` : "Amigo offline";
+                btnTp.disabled = !online;
+                btnTp.onclick = () => tpAmigo(a.id);
+
+                // Botão PV
+                const btnPv = document.createElement("button");
+                btnPv.className = "amigo-btn-pv";
+                btnPv.textContent = "PV";
+                btnPv.title = `Conversar com ${a.username}`;
+                btnPv.onclick = () => abrirPV(a.id, a.username);
+
+                // Botão remover
+                const btnRm = document.createElement("button");
+                btnRm.className = "social-btn-acao remove";
+                btnRm.textContent = "×";
+                btnRm.title = "Remover amigo";
+                btnRm.onclick = () => removerAmigo(a.id);
+
+                acoes.appendChild(btnTp);
+                acoes.appendChild(btnPv);
+                acoes.appendChild(btnRm);
                 item.appendChild(nome);
-                item.appendChild(btn);
+                item.appendChild(acoes);
                 lista.appendChild(item);
             });
         }
@@ -752,13 +912,19 @@ function conectar(opts = {}) {
         else if (dados.tipo === "lista_jogadores") {
             // O servidor envia nosso próprio sid na primeira lista
             if (dados.meu_sid) meuSid = dados.meu_sid;
-            // Conta logada? ativa o painel social e popula amigos/favoritos
+            // Conta logada? ativa o painel social e popula amigos/favoritos/pedidos
             if (dados.conta) {
                 contaAtiva = true;
                 meusAmigos = dados.amigos || [];
                 meusFavoritos = dados.favoritos || [];
+                meusPedidos = dados.pedidos || [];
+                amigosOnline = new Set(dados.online || []);
                 const btnSocial = document.getElementById("btnSocialToggle");
                 if (btnSocial) btnSocial.style.display = "block";
+                // Avisa se houver pedidos pendentes
+                if (meusPedidos.length > 0) {
+                    registrarDebug("info", `» ${meusPedidos.length} pedido(s) de amizade.`);
+                }
                 registrarDebug("info", `» Logado como conta (${meuBicho.username}).`);
                 renderizarSocial();
             }
@@ -775,22 +941,29 @@ function conectar(opts = {}) {
         }
         else if (dados.tipo === "amigos") {
             meusAmigos = dados.lista || [];
+            if (dados.online) amigosOnline = new Set(dados.online);
+            if (dados.pedidos) meusPedidos = dados.pedidos;
             renderizarSocial();
         }
-        else if (dados.tipo === "amigo_add") {
-            // Evita duplicar se já estiver na lista
-            if (!meusAmigos.some(a => a.id === dados.amigo.id)) {
-                meusAmigos.push(dados.amigo);
+        else if (dados.tipo === "pedido_recebido") {
+            // Alguém me mandou pedido enquanto estou online
+            const de = dados.de;
+            if (de && !meusPedidos.some(p => p.id === de.id)) {
+                meusPedidos.push(de);
             }
-            _socialMsg(`${dados.amigo.username} adicionado!`, "ok");
+            appendChatMsg("sistema", [{text: `» ${de.username} quer ser seu amigo! Abra o painel ★ AMIGOS.`}]);
+            registrarDebug("info", `» Pedido de amizade de ${de.username}.`);
+            renderizarSocial();
+        }
+        else if (dados.tipo === "pedido_enviado") {
+            _socialMsg(dados.mensagem || "Pedido enviado.", "ok");
+        }
+        else if (dados.tipo === "pedido_recusado") {
+            meusPedidos = meusPedidos.filter(p => p.id !== dados.from_id);
             renderizarSocial();
         }
         else if (dados.tipo === "amigo_erro") {
-            _socialMsg(dados.mensagem || "Não foi possível adicionar.", "erro");
-        }
-        else if (dados.tipo === "amigo_removido") {
-            meusAmigos = meusAmigos.filter(a => a.id !== dados.friend_id);
-            renderizarSocial();
+            _socialMsg(dados.mensagem || "Não foi possível.", "erro");
         }
         else if (dados.tipo === "favorito_estado") {
             if (dados.favoritado === true) {
@@ -801,6 +974,45 @@ function conectar(opts = {}) {
                 _socialMsg(`Sala removida dos favoritos.`, "ok");
             }
             renderizarSocial();
+        }
+        else if (dados.tipo === "tp_ok") {
+            // Teleporte até o amigo: troca de sala client-side
+            minhaSala = dados.sala;
+            meuBicho.x = dados.x;
+            meuBicho.y = dados.y;
+            if (dados.meu_sid) meuSid = dados.meu_sid;
+            outrosJogadores = {};
+            (dados.jogadores || []).forEach(p => {
+                if (p.id !== meuSid) {
+                    p.chatTexto = ""; p.chatTimer = 0; p.isTyping = false;
+                    p.lado = p.lado || "direita";
+                    p.animTick = 0; p.movimentoTimer = 0;
+                    p.targetX = p.x; p.targetY = p.y;
+                    outrosJogadores[p.id] = p;
+                }
+            });
+            legendaTimer = 180;
+            tocarMusica(minhaSala);
+            getLogica()?.onEnter?.(MAPAS[minhaSala]);
+            _socialMsg("Teleportado!", "ok");
+        }
+        else if (dados.tipo === "tp_erro") {
+            _socialMsg(dados.mensagem || "Não foi possível teleportar.", "erro");
+        }
+        else if (dados.tipo === "pv") {
+            // Mensagem privada (recebida ou eco da minha própria)
+            const souEu = dados.eco === true;
+            const friendId = souEu ? dados.para_id : dados.de_id;
+            _registrarPV(friendId, dados.de_nome, dados.texto, souEu);
+            if (!souEu) {
+                // Notifica no chat principal se o PV não estiver aberto com ele
+                if (!pvAtual || pvAtual.id !== friendId) {
+                    appendChatMsg("sistema", [{text: `✉ PV de ${dados.de_nome}: ${dados.texto}`}]);
+                }
+            }
+        }
+        else if (dados.tipo === "pv_erro") {
+            _socialMsg(dados.mensagem || "Erro no PV.", "erro");
         }
         else if (dados.tipo === "movimento") {
             if (outrosJogadores[dados.id]) {
@@ -865,6 +1077,14 @@ chatInput.addEventListener("keypress", (e) => {
     }
 });
 
+// Enter no chat privado (PV)
+const pvInputEl = document.getElementById("pvInput");
+if (pvInputEl) {
+    pvInputEl.addEventListener("keypress", (e) => {
+        if (e.key === "Enter") { e.preventDefault(); enviarPV(); }
+    });
+}
+
 canvas.addEventListener("mousemove", (e) => {
     const rect = canvas.getBoundingClientRect();
     mouseX = Math.floor((e.clientX - rect.left) * (canvas.width / rect.width));
@@ -895,6 +1115,18 @@ window.addEventListener("keydown", (e) => {
         const painel = document.getElementById("emojiPanel");
         if (painel?.classList.contains("aberto")) {
             painel.classList.remove("aberto");
+            e.preventDefault(); return;
+        }
+        // PV aberto?
+        const pv = document.getElementById("pvPanel");
+        if (pv?.classList.contains("aberto")) {
+            fecharPV();
+            e.preventDefault(); return;
+        }
+        // Painel social aberto?
+        const social = document.getElementById("socialPanel");
+        if (social?.classList.contains("aberto")) {
+            social.classList.remove("aberto");
             e.preventDefault(); return;
         }
         const overlay = document.getElementById("chatOverlay");

@@ -103,6 +103,13 @@ class Banco:
                     created_at TIMESTAMPTZ DEFAULT NOW(),
                     UNIQUE(user_id, friend_id)
                 );
+                CREATE TABLE IF NOT EXISTS friend_requests (
+                    id SERIAL PRIMARY KEY,
+                    from_id INTEGER REFERENCES users(id) ON DELETE CASCADE,
+                    to_id INTEGER REFERENCES users(id) ON DELETE CASCADE,
+                    created_at TIMESTAMPTZ DEFAULT NOW(),
+                    UNIQUE(from_id, to_id)
+                );
                 CREATE TABLE IF NOT EXISTS favorite_rooms (
                     id SERIAL PRIMARY KEY,
                     user_id INTEGER REFERENCES users(id) ON DELETE CASCADE,
@@ -120,6 +127,8 @@ class Banco:
                 );
                 CREATE INDEX IF NOT EXISTS idx_friend_user ON friendships(user_id);
                 CREATE INDEX IF NOT EXISTS idx_fav_user ON favorite_rooms(user_id);
+                CREATE INDEX IF NOT EXISTS idx_req_to ON friend_requests(to_id);
+                CREATE INDEX IF NOT EXISTS idx_req_from ON friend_requests(from_id);
             """)
 
     # ---- Auth ----
@@ -167,24 +176,88 @@ class Banco:
         except Exception:
             return []
 
-    async def add_amigo(self, user_id, friend_username):
+    async def sao_amigos(self, user_id, other_id):
+        if not self.ativo: return False
+        try:
+            r = await self.pool.fetchval(
+                "SELECT 1 FROM friendships WHERE user_id=$1 AND friend_id=$2", user_id, other_id)
+            return bool(r)
+        except Exception:
+            return False
+
+    async def criar_pedido_amizade(self, from_id, to_username):
+        """Cria pedido pendente. Retorna dict do alvo, 'ja_amigos', 'self', 'inexistente', ou None."""
         if not self.ativo: return None
         try:
-            friend = await self.buscar_usuario(friend_username)
-            if not friend or friend["id"] == user_id:
-                return None
+            alvo = await self.buscar_usuario(to_username)
+            if not alvo: return "inexistente"
+            if alvo["id"] == from_id: return "self"
+            if await self.sao_amigos(from_id, alvo["id"]): return "ja_amigos"
+            # Se o alvo já me mandou pedido, aceita direto (vira amizade mútua)
+            reverso = await self.pool.fetchval(
+                "SELECT 1 FROM friend_requests WHERE from_id=$1 AND to_id=$2",
+                alvo["id"], from_id)
+            if reverso:
+                await self.aceitar_pedido(from_id, alvo["id"])
+                return "aceito_mutuo"
             await self.pool.execute(
-                "INSERT INTO friendships(user_id,friend_id) VALUES($1,$2) ON CONFLICT DO NOTHING",
-                user_id, friend["id"])
-            return {"id": friend["id"], "username": friend["username"], "sprite_id": friend["sprite_id"]}
+                "INSERT INTO friend_requests(from_id,to_id) VALUES($1,$2) ON CONFLICT DO NOTHING",
+                from_id, alvo["id"])
+            return {"id": alvo["id"], "username": alvo["username"], "sprite_id": alvo["sprite_id"]}
         except Exception:
             return None
 
-    async def remover_amigo(self, user_id, friend_id):
+    async def listar_pedidos_recebidos(self, user_id):
+        """Pedidos pendentes que EU recebi."""
+        if not self.ativo: return []
+        try:
+            rows = await self.pool.fetch(
+                "SELECT u.id,u.username,u.sprite_id FROM friend_requests r "
+                "JOIN users u ON u.id=r.from_id WHERE r.to_id=$1 ORDER BY r.created_at DESC",
+                user_id)
+            return [dict(r) for r in rows]
+        except Exception:
+            return []
+
+    async def aceitar_pedido(self, user_id, from_id):
+        """user_id aceita o pedido de from_id. Cria amizade mútua (2 linhas)."""
+        if not self.ativo: return False
+        try:
+            # Confirma que o pedido existe
+            existe = await self.pool.fetchval(
+                "SELECT 1 FROM friend_requests WHERE from_id=$1 AND to_id=$2", from_id, user_id)
+            if not existe: return False
+            async with self.pool.acquire() as c:
+                async with c.transaction():
+                    await c.execute(
+                        "INSERT INTO friendships(user_id,friend_id) VALUES($1,$2) ON CONFLICT DO NOTHING",
+                        user_id, from_id)
+                    await c.execute(
+                        "INSERT INTO friendships(user_id,friend_id) VALUES($1,$2) ON CONFLICT DO NOTHING",
+                        from_id, user_id)
+                    await c.execute(
+                        "DELETE FROM friend_requests WHERE (from_id=$1 AND to_id=$2) OR (from_id=$2 AND to_id=$1)",
+                        from_id, user_id)
+            return True
+        except Exception:
+            return False
+
+    async def recusar_pedido(self, user_id, from_id):
         if not self.ativo: return False
         try:
             await self.pool.execute(
-                "DELETE FROM friendships WHERE user_id=$1 AND friend_id=$2", user_id, friend_id)
+                "DELETE FROM friend_requests WHERE from_id=$1 AND to_id=$2", from_id, user_id)
+            return True
+        except Exception:
+            return False
+
+    async def remover_amigo(self, user_id, friend_id):
+        """Remove amizade dos DOIS lados."""
+        if not self.ativo: return False
+        try:
+            await self.pool.execute(
+                "DELETE FROM friendships WHERE (user_id=$1 AND friend_id=$2) OR (user_id=$2 AND friend_id=$1)",
+                user_id, friend_id)
             return True
         except Exception:
             return False
@@ -409,6 +482,16 @@ class Hub:
     def username_em_uso(self, username):
         return any(s.logado and s.username == username for s in self._sessions.values())
 
+    def sessoes_do_usuario(self, user_id):
+        """Todas as sessões online de um user_id (pode ter mais de uma aba)."""
+        if user_id is None:
+            return []
+        return [s for s in self._sessions.values() if s.user_id == user_id and s.logado]
+
+    def usuarios_online_ids(self):
+        """Set de user_ids logados com conta agora."""
+        return {s.user_id for s in self._sessions.values() if s.user_id and s.logado}
+
     async def mover_para_sala(self, sid, nova_sala):
         async with self._lock:
             s = self._sessions.get(sid)
@@ -540,6 +623,18 @@ async def loop_minigames(hub):
 # ──────────────────────────────────────────────────────────────
 #   HANDLER WEBSOCKET
 # ──────────────────────────────────────────────────────────────
+async def _notificar_amigos_atualizados(hub, user_id):
+    """Reenvia a lista de amigos + pedidos pra todas as sessões online do user_id."""
+    sessoes = hub.sessoes_do_usuario(user_id)
+    if not sessoes:
+        return
+    lista = await banco.listar_amigos(user_id)
+    pedidos = await banco.listar_pedidos_recebidos(user_id)
+    online = list(hub.usuarios_online_ids())
+    for sess in sessoes:
+        await sess.enviar({"tipo":"amigos","lista":lista,"online":online,"pedidos":pedidos})
+
+
 async def escritor(s):
     try:
         while True:
@@ -641,6 +736,8 @@ async def handler_ws(websocket, hub):
                     if s.user_id and banco.ativo:
                         extras["favoritos"] = await banco.listar_favoritos(s.user_id)
                         extras["amigos"] = await banco.listar_amigos(s.user_id)
+                        extras["online"] = list(hub.usuarios_online_ids())
+                        extras["pedidos"] = await banco.listar_pedidos_recebidos(s.user_id)
                     await s.enviar({"tipo":"lista_jogadores","meu_sid":s.sid,
                                     "jogadores":outros, "conta": bool(s.user_id), **extras})
                     await hub.broadcast(SALA_INICIAL, {"tipo":"novo_jogador", **s.to_dict()}, exceto=s.sid)
@@ -666,15 +763,54 @@ async def handler_ws(websocket, hub):
 
             if tipo == "listar_amigos":
                 if s.user_id:
-                    await s.enviar({"tipo":"amigos","lista":await banco.listar_amigos(s.user_id)})
+                    await s.enviar({"tipo":"amigos",
+                                    "lista": await banco.listar_amigos(s.user_id),
+                                    "online": list(hub.usuarios_online_ids()),
+                                    "pedidos": await banco.listar_pedidos_recebidos(s.user_id)})
                 continue
 
             if tipo == "add_amigo":
                 if s.user_id:
                     alvo = _sanitize_username(d.get("username"))
-                    r = await banco.add_amigo(s.user_id, alvo) if alvo else None
-                    if r: await s.enviar({"tipo":"amigo_add","amigo":r})
-                    else: await s.enviar({"tipo":"amigo_erro","mensagem":"Não foi possível adicionar."})
+                    r = await banco.criar_pedido_amizade(s.user_id, alvo) if alvo else None
+                    if r is None:
+                        await s.enviar({"tipo":"amigo_erro","mensagem":"Erro ao enviar pedido."})
+                    elif r == "inexistente":
+                        await s.enviar({"tipo":"amigo_erro","mensagem":"Usuário não encontrado."})
+                    elif r == "self":
+                        await s.enviar({"tipo":"amigo_erro","mensagem":"Você não pode se adicionar."})
+                    elif r == "ja_amigos":
+                        await s.enviar({"tipo":"amigo_erro","mensagem":"Vocês já são amigos."})
+                    elif r == "aceito_mutuo":
+                        # Ambos tinham pedido pendente → virou amizade na hora
+                        await s.enviar({"tipo":"pedido_enviado","mutuo":True,"mensagem":"Agora vocês são amigos!"})
+                        await _notificar_amigos_atualizados(hub, s.user_id)
+                    else:
+                        # Pedido criado; notifica o alvo se estiver online
+                        await s.enviar({"tipo":"pedido_enviado","mutuo":False,
+                                        "mensagem":f"Pedido enviado para {r['username']}."})
+                        eu = {"id": s.user_id, "username": s.username, "sprite_id": s.sprite_id}
+                        for sess in hub.sessoes_do_usuario(r["id"]):
+                            await sess.enviar({"tipo":"pedido_recebido","de":eu})
+                continue
+
+            if tipo == "aceitar_pedido":
+                if s.user_id:
+                    from_id = d.get("from_id")
+                    if isinstance(from_id, int):
+                        ok = await banco.aceitar_pedido(s.user_id, from_id)
+                        if ok:
+                            # Atualiza a lista dos dois lados
+                            await _notificar_amigos_atualizados(hub, s.user_id)
+                            await _notificar_amigos_atualizados(hub, from_id)
+                continue
+
+            if tipo == "recusar_pedido":
+                if s.user_id:
+                    from_id = d.get("from_id")
+                    if isinstance(from_id, int):
+                        await banco.recusar_pedido(s.user_id, from_id)
+                        await s.enviar({"tipo":"pedido_recusado","from_id":from_id})
                 continue
 
             if tipo == "remover_amigo":
@@ -682,7 +818,66 @@ async def handler_ws(websocket, hub):
                     fid = d.get("friend_id")
                     if isinstance(fid, int):
                         await banco.remover_amigo(s.user_id, fid)
-                        await s.enviar({"tipo":"amigo_removido","friend_id":fid})
+                        await _notificar_amigos_atualizados(hub, s.user_id)
+                        await _notificar_amigos_atualizados(hub, fid)
+                continue
+
+            # ═══ TP até o amigo ═════════════════════════════════
+            if tipo == "tp_amigo":
+                if s.user_id:
+                    fid = d.get("friend_id")
+                    if not isinstance(fid, int):
+                        continue
+                    # Só pode TPar se forem amigos de fato
+                    if not await banco.sao_amigos(s.user_id, fid):
+                        await s.enviar({"tipo":"tp_erro","mensagem":"Vocês não são amigos."}); continue
+                    sessoes_amigo = hub.sessoes_do_usuario(fid)
+                    if not sessoes_amigo:
+                        await s.enviar({"tipo":"tp_erro","mensagem":"Amigo não está online."}); continue
+                    alvo = sessoes_amigo[0]
+                    sala_alvo = alvo.sala
+                    if not sala_alvo or sala_alvo not in hub.salas_disponiveis():
+                        await s.enviar({"tipo":"tp_erro","mensagem":"Não foi possível localizar o amigo."}); continue
+                    # Move pra sala do amigo, na posição dele
+                    sala_antiga = hub.sala_de(s.sid)
+                    s.x = max(0.0, min(368.0, alvo.x))
+                    s.y = max(0.0, min(268.0, alvo.y))
+                    if sala_antiga:
+                        for mod in MODS_COM_LEAVE:
+                            try: mod.on_leave(websocket, jp)
+                            except Exception: pass
+                    if await hub.mover_para_sala(s.sid, sala_alvo):
+                        if sala_antiga:
+                            await hub.broadcast(sala_antiga, {"tipo":"jogador_saiu","id":s.sid})
+                        outros = [o.to_dict() for o in await hub.snapshot_sala(sala_alvo) if o.sid != s.sid]
+                        await s.enviar({"tipo":"tp_ok","sala":sala_alvo,
+                                        "x":s.x,"y":s.y,"meu_sid":s.sid,"jogadores":outros})
+                        await hub.broadcast(sala_alvo, {"tipo":"novo_jogador", **s.to_dict()}, exceto=s.sid)
+                        banco.log(s.user_id, s.username, "tp_amigo", sala_alvo)
+                continue
+
+            # ═══ Chat privado (PV) ══════════════════════════════
+            if tipo == "pv":
+                if s.user_id:
+                    fid = d.get("friend_id")
+                    texto = d.get("texto","")
+                    if not isinstance(fid, int) or not isinstance(texto, str):
+                        continue
+                    texto = texto.strip()[:MAX_CHAT_LEN]
+                    if not texto:
+                        continue
+                    if not await banco.sao_amigos(s.user_id, fid):
+                        await s.enviar({"tipo":"pv_erro","mensagem":"Vocês não são amigos."}); continue
+                    sessoes_amigo = hub.sessoes_do_usuario(fid)
+                    msg = {"tipo":"pv","de_id":s.user_id,"de_nome":s.username,
+                           "para_id":fid,"texto":texto,"ts":int(time.time())}
+                    # Envia pro amigo (todas as abas dele)
+                    entregue = False
+                    for sess in sessoes_amigo:
+                        await sess.enviar(msg)
+                        entregue = True
+                    # Eco de volta pra mim (pra aparecer no meu chat)
+                    await s.enviar({**msg, "eco":True, "entregue":entregue})
                 continue
 
             if tipo == "toggle_favorito":
