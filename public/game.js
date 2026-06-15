@@ -282,6 +282,14 @@ async function inicializar() {
 
         btn.disabled = false;
         btn.textContent = "ENTRAR";
+
+        // Se a URL tem ?reset=TOKEN, abre direto a tela de nova senha
+        const params = new URLSearchParams(location.search);
+        const resetTok = params.get("reset");
+        if (resetTok) {
+            _resetToken = resetTok;
+            trocarAba("reset_aplicar");
+        }
     } catch (e) {
         console.error("Erro ao carregar configs:", e);
         btn.textContent = "ERRO — VEJA O CONSOLE";
@@ -445,9 +453,10 @@ window.enviarEmote = enviarEmote;
 //   Abas no menu: convidado | entrar | criar conta.
 //   Auth acontece via WebSocket (registrar / autenticar).
 // =====================================================
-let modoAuth = "convidado";          // convidado | entrar | criar
+let modoAuth = "convidado";          // convidado | entrar | criar | esqueci | reset_aplicar
 let tokenConta = null;               // JWT salvo após login/registro
 let wsAuth = null;                   // socket temporário só pra auth
+let _resetToken = null;              // token de reset vindo da URL (?reset=...)
 
 function _authMsg(texto, tipo) {
     const el = document.getElementById("authMsg");
@@ -460,24 +469,47 @@ function _authMsg(texto, tipo) {
 function trocarAba(modo) {
     modoAuth = modo;
     _authMsg("", "");
+    // Só as 3 abas principais ficam destacadas; esqueci/reset_aplicar não têm aba
     document.querySelectorAll(".auth-tab").forEach(t => {
         t.classList.toggle("ativa", t.dataset.modo === modo);
     });
-    const contaFields = document.getElementById("contaFields");
-    const guestField  = document.getElementById("username");
-    const btn         = document.getElementById("btnEntrar");
+    const contaFields   = document.getElementById("contaFields");
+    const guestField    = document.getElementById("username");
+    const seletorSkin   = document.querySelector(".selector-container");
+    const emailField    = document.getElementById("contaEmail");
+    const linkEsqueci   = document.getElementById("linkEsqueciSenha");
+    const resetFields   = document.getElementById("resetFields");
+    const resetAplicar  = document.getElementById("resetAplicarFields");
+    const btn           = document.getElementById("btnEntrar");
+
+    // Esconde tudo que é condicional; cada modo religa o que precisa
+    contaFields.style.display  = "none";
+    guestField.style.display   = "none";
+    if (seletorSkin) seletorSkin.style.display = "none";
+    if (emailField)   emailField.style.display  = "none";
+    if (linkEsqueci)  linkEsqueci.style.display = "none";
+    if (resetFields)  resetFields.style.display = "none";
+    if (resetAplicar) resetAplicar.style.display = "none";
+
     if (modo === "convidado") {
-        contaFields.style.display = "none";
         guestField.style.display = "block";
+        if (seletorSkin) seletorSkin.style.display = "flex";
         btn.textContent = "ENTRAR";
     } else if (modo === "entrar") {
         contaFields.style.display = "block";
-        guestField.style.display = "none";
+        if (linkEsqueci) linkEsqueci.style.display = "block";
         btn.textContent = "ENTRAR COM CONTA";
-    } else {
+    } else if (modo === "criar") {
         contaFields.style.display = "block";
-        guestField.style.display = "none";
+        if (emailField) emailField.style.display = "block";
+        if (seletorSkin) seletorSkin.style.display = "flex";
         btn.textContent = "CRIAR E ENTRAR";
+    } else if (modo === "esqueci") {
+        if (resetFields) resetFields.style.display = "block";
+        btn.textContent = "ENVIAR RECUPERAÇÃO";
+    } else if (modo === "reset_aplicar") {
+        if (resetAplicar) resetAplicar.style.display = "block";
+        btn.textContent = "REDEFINIR SENHA";
     }
 }
 window.trocarAba = trocarAba;
@@ -494,16 +526,82 @@ function _wsUrl() {
 function acaoMenu() {
     if (modoAuth === "convidado") {
         conectar();
-    } else {
+    } else if (modoAuth === "entrar" || modoAuth === "criar") {
         autenticarOuCriar(modoAuth === "criar" ? "registrar" : "autenticar");
+    } else if (modoAuth === "esqueci") {
+        solicitarReset();
+    } else if (modoAuth === "reset_aplicar") {
+        aplicarReset();
     }
 }
 window.acaoMenu = acaoMenu;
+
+// Abre um socket dedicado de auth e manda uma mensagem, tratando a resposta.
+// cb(dados) decide o que fazer com cada resposta.
+function _authSocket(payload, onResp) {
+    const sock = new WebSocket(_wsUrl());
+    sock.onopen = () => sock.send(JSON.stringify(payload));
+    sock.onmessage = (event) => {
+        let dados;
+        try { dados = JSON.parse(event.data); } catch { return; }
+        onResp(dados, sock);
+    };
+    sock.onerror = () => onResp({ tipo: "_erro_conexao" }, sock);
+    return sock;
+}
+
+// Solicita recuperação de senha (resposta sempre neutra)
+function solicitarReset() {
+    const username = document.getElementById("resetUser").value.trim().toUpperCase();
+    if (username.length < 3) return _authMsg("Digite seu usuário.", "erro");
+    const btn = document.getElementById("btnEntrar");
+    btn.disabled = true; btn.textContent = "ENVIANDO...";
+    _authSocket({ tipo: "solicitar_reset", username }, (dados, sock) => {
+        if (dados.tipo === "reset_solicitado") {
+            _authMsg(dados.mensagem || "Se a conta existir, enviamos instruções.", "ok");
+            sock.close();
+            btn.disabled = false; btn.textContent = "ENVIAR RECUPERAÇÃO";
+        } else if (dados.tipo === "_erro_conexao") {
+            _authMsg("Erro de conexão.", "erro");
+            btn.disabled = false; btn.textContent = "ENVIAR RECUPERAÇÃO";
+        }
+    });
+}
+window.solicitarReset = solicitarReset;
+
+// Aplica nova senha usando o token que veio na URL (?reset=...)
+function aplicarReset() {
+    const novaSenha = document.getElementById("resetNovaSenha").value;
+    if (novaSenha.length < 6) return _authMsg("Senha precisa de 6+ caracteres.", "erro");
+    if (!_resetToken) return _authMsg("Token ausente. Use o link do email.", "erro");
+    const btn = document.getElementById("btnEntrar");
+    btn.disabled = true; btn.textContent = "REDEFININDO...";
+    _authSocket({ tipo: "aplicar_reset", token: _resetToken, password: novaSenha }, (dados, sock) => {
+        if (dados.tipo === "reset_ok") {
+            _authMsg(dados.mensagem || "Senha redefinida! Faça login.", "ok");
+            sock.close();
+            _resetToken = null;
+            // Limpa o ?reset= da URL e volta pro login
+            history.replaceState(null, "", location.pathname);
+            btn.disabled = false;
+            setTimeout(() => trocarAba("entrar"), 1500);
+        } else if (dados.tipo === "reset_erro") {
+            _authMsg(dados.mensagem || "Link inválido ou expirado.", "erro");
+            sock.close();
+            btn.disabled = false; btn.textContent = "REDEFINIR SENHA";
+        } else if (dados.tipo === "_erro_conexao") {
+            _authMsg("Erro de conexão.", "erro");
+            btn.disabled = false; btn.textContent = "REDEFINIR SENHA";
+        }
+    });
+}
+window.aplicarReset = aplicarReset;
 
 // Faz registro OU login via WebSocket dedicado, salva token e entra no jogo
 function autenticarOuCriar(tipo) {
     const username = document.getElementById("contaUser").value.trim().toUpperCase();
     const password = document.getElementById("contaPass").value;
+    const email = (document.getElementById("contaEmail")?.value || "").trim();
     if (username.length < 3) return _authMsg("Usuário precisa de 3+ caracteres.", "erro");
     if (password.length < 6) return _authMsg("Senha precisa de 6+ caracteres.", "erro");
     if (!Object.keys(MAPAS).length) return _authMsg("Configs carregando, aguarde...", "erro");
@@ -513,11 +611,15 @@ function autenticarOuCriar(tipo) {
     btn.textContent = tipo === "registrar" ? "CRIANDO..." : "ENTRANDO...";
     _authMsg("", "");
 
+    // Payload: inclui email só no registro (e só se preenchido)
+    const payload = { tipo, username, password };
+    if (tipo === "registrar" && email) payload.email = email;
+
     // Abre um socket dedicado só pra auth
     wsAuth = new WebSocket(_wsUrl());
 
     wsAuth.onopen = () => {
-        wsAuth.send(JSON.stringify({ tipo, username, password }));
+        wsAuth.send(JSON.stringify(payload));
     };
 
     wsAuth.onmessage = (event) => {
@@ -560,6 +662,7 @@ let meusAmigos = [];               // [{id, username, sprite_id}]
 let meusFavoritos = [];            // ["the_hub", ...]
 let meusPedidos = [];              // pedidos recebidos [{id, username, sprite_id}]
 let amigosOnline = new Set();      // ids de amigos online agora
+let likesSala = {};                // { room_id: {total, curtiu} }
 
 // Estado do chat privado
 let pvAtual = null;                // {id, username} do amigo com quem converso
@@ -634,6 +737,36 @@ function toggleFavoritoSalaAtual() {
     }
 }
 window.toggleFavoritoSalaAtual = toggleFavoritoSalaAtual;
+
+function toggleLikeSalaAtual() {
+    if (ws?.readyState === WebSocket.OPEN) {
+        ws.send(JSON.stringify({ tipo: "toggle_like", room_id: minhaSala }));
+    }
+}
+window.toggleLikeSalaAtual = toggleLikeSalaAtual;
+
+// Pede ao servidor o estado de likes da sala atual (total + se eu curti)
+function pedirEstadoSala() {
+    if (ws?.readyState === WebSocket.OPEN && minhaSala) {
+        ws.send(JSON.stringify({ tipo: "estado_sala", room_id: minhaSala }));
+    }
+}
+
+// Dispara a animação visual de teleporte (flash azul + label "TELEPORTADO")
+function animarTeleporte() {
+    const flash = document.getElementById("tpFlash");
+    const label = document.getElementById("tpLabel");
+    if (flash) {
+        flash.classList.remove("ativo");
+        void flash.offsetWidth;        // força reflow pra reiniciar a animação
+        flash.classList.add("ativo");
+    }
+    if (label) {
+        label.classList.remove("ativo");
+        void label.offsetWidth;
+        label.classList.add("ativo");
+    }
+}
 
 // Amigo online: ou está na lista de amigosOnline (servidor) ou na minha sala
 function _amigoEstaOnline(amigo) {
@@ -725,6 +858,17 @@ function renderizarSocial() {
         btnFav.textContent = favoritada
             ? `★ SALA FAVORITADA (${minhaSala})`
             : `☆ FAVORITAR ESTA SALA`;
+    }
+
+    // Botão de like reflete total + se eu curti
+    const btnLike = document.getElementById("btnLikeSala");
+    const likeCount = document.getElementById("likeCount");
+    if (btnLike) {
+        const info = likesSala[minhaSala] || { total: 0, curtiu: false };
+        if (likeCount) likeCount.textContent = info.total;
+        btnLike.classList.toggle("ativo", !!info.curtiu);
+        // ♥ cheio se curti, ♡ vazio se não
+        btnLike.innerHTML = (info.curtiu ? "♥" : "♡") + ` <span id="likeCount">${info.total}</span> LIKES`;
     }
 
     // Pedidos de amizade recebidos
@@ -927,6 +1071,7 @@ function conectar(opts = {}) {
                 }
                 registrarDebug("info", `» Logado como conta (${meuBicho.username}).`);
                 renderizarSocial();
+                pedirEstadoSala();   // pega likes da sala inicial
             }
             dados.jogadores.forEach(p => {
                 if (p.id !== meuSid) {
@@ -975,6 +1120,13 @@ function conectar(opts = {}) {
             }
             renderizarSocial();
         }
+        else if (dados.tipo === "like_estado") {
+            likesSala[dados.room_id] = {
+                total: dados.total || 0,
+                curtiu: dados.curtiu === true,
+            };
+            renderizarSocial();
+        }
         else if (dados.tipo === "tp_ok") {
             // Teleporte até o amigo: troca de sala client-side
             minhaSala = dados.sala;
@@ -994,6 +1146,9 @@ function conectar(opts = {}) {
             legendaTimer = 180;
             tocarMusica(minhaSala);
             getLogica()?.onEnter?.(MAPAS[minhaSala]);
+            animarTeleporte();      // flash + label "TELEPORTADO"
+            pedirEstadoSala();      // atualiza likes da nova sala
+            renderizarSocial();     // atualiza botões de fav/like pra nova sala
             _socialMsg("Teleportado!", "ok");
         }
         else if (dados.tipo === "tp_erro") {
@@ -1311,6 +1466,8 @@ function processarTransicao() {
             }
             // Notifica a nova lógica
             getLogica()?.onEnter?.(MAPAS[minhaSala]);
+            // Atualiza likes/favorito da nova sala (se logado com conta)
+            if (contaAtiva) { pedirEstadoSala(); renderizarSocial(); }
         }
     } else if (estadoTransicao === "fade_in") {
         transicaoAlpha -= 0.05;

@@ -291,6 +291,17 @@
         #authMsg.erro { display: block; background: #2a1010; color: #ff6666; border: 1px solid #ff6666; }
         #authMsg.ok   { display: block; background: #102a10; color: #66ff88; border: 1px solid #66ff88; }
 
+        /* Links de reset de senha */
+        #linkEsqueciSenha, #voltarLogin {
+            text-align: right; margin: -8px 0 14px;
+        }
+        #voltarLogin { text-align: left; }
+        #linkEsqueciSenha a, #voltarLogin a {
+            font-size: 10px; color: #777; letter-spacing: 1px;
+            text-decoration: none; cursor: pointer;
+        }
+        #linkEsqueciSenha a:hover, #voltarLogin a:hover { color: #66ccff; }
+
         input[type="password"] {
             width: 100%; padding: 10px; background: #222222; color: #ffffff;
             border: 2px solid #555555; font-family: 'Courier New', monospace;
@@ -353,6 +364,16 @@
         }
         #btnFavSala:hover { border-color: #ffd24a; }
         #btnFavSala.ativo { background: #2a2410; color: #ffd24a; border-color: #ffd24a; }
+
+        #btnLikeSala {
+            width: 100%; padding: 10px; margin-top: 6px;
+            background: #1a1010; color: #ff6688;
+            border: 2px solid #4a1a26;
+            font-family: 'Courier New', monospace; font-size: 11px;
+            letter-spacing: 1px; cursor: pointer; box-shadow: none;
+        }
+        #btnLikeSala:hover { border-color: #ff6688; }
+        #btnLikeSala.ativo { background: #2a1018; color: #ff88a0; border-color: #ff6688; }
 
         .social-add-row { display: flex; gap: 6px; }
         .social-add-row input {
@@ -483,6 +504,47 @@
             #btnSocialToggle { top: 6px; right: 6px; padding: 6px 10px; font-size: 9px; }
         }
 
+        /* ===== ANIMAÇÃO DE TELEPORTE ===== */
+        #gameCanvasWrapper { position: relative; }
+        #tpFlash {
+            position: absolute;
+            top: 4px; left: 4px; right: 4px; bottom: 4px;  /* respeita a borda do canvas */
+            background: #66ccff;
+            opacity: 0;
+            pointer-events: none;
+            z-index: 20;
+        }
+        #tpFlash.ativo {
+            animation: tpFade 0.7s ease-out forwards;
+        }
+        @keyframes tpFade {
+            0%   { opacity: 0; }
+            35%  { opacity: 0.85; }
+            100% { opacity: 0; }
+        }
+        #tpLabel {
+            position: absolute;
+            top: 50%; left: 50%;
+            transform: translate(-50%, -50%) scale(0.8);
+            color: #fff;
+            font-family: 'Courier New', monospace;
+            font-size: 20px; font-weight: bold; letter-spacing: 3px;
+            text-shadow: 0 0 10px #66ccff, 0 0 20px #66ccff;
+            opacity: 0;
+            pointer-events: none;
+            z-index: 21;
+            white-space: nowrap;
+        }
+        #tpLabel.ativo {
+            animation: tpLabelPop 1.1s ease-out forwards;
+        }
+        @keyframes tpLabelPop {
+            0%   { opacity: 0; transform: translate(-50%, -50%) scale(0.6); }
+            25%  { opacity: 1; transform: translate(-50%, -50%) scale(1.1); }
+            70%  { opacity: 1; transform: translate(-50%, -50%) scale(1.0); }
+            100% { opacity: 0; transform: translate(-50%, -50%) scale(1.0); }
+        }
+
     </style>
 </head>
 <body>
@@ -505,6 +567,26 @@
         <div id="contaFields" style="display:none;">
             <input type="text" id="contaUser" placeholder="USUÁRIO" maxlength="16" autocomplete="username">
             <input type="password" id="contaPass" placeholder="SENHA" maxlength="64" autocomplete="current-password">
+            <!-- Email só aparece no modo CRIAR CONTA (opcional, pra recuperação futura) -->
+            <input type="text" id="contaEmail" placeholder="EMAIL (opcional)" maxlength="120" autocomplete="email" style="display:none;">
+            <!-- Link esqueci a senha (só no modo ENTRAR) -->
+            <div id="linkEsqueciSenha" style="display:none;">
+                <a href="#" onclick="trocarAba('esqueci'); return false;">Esqueci minha senha</a>
+            </div>
+        </div>
+
+        <!-- Reset: solicitar (modo esqueci) -->
+        <div id="resetFields" style="display:none;">
+            <input type="text" id="resetUser" placeholder="SEU USUÁRIO" maxlength="16">
+            <div id="voltarLogin">
+                <a href="#" onclick="trocarAba('entrar'); return false;">← Voltar ao login</a>
+            </div>
+        </div>
+
+        <!-- Reset: aplicar nova senha (quando chega via link ?reset=TOKEN) -->
+        <div id="resetAplicarFields" style="display:none;">
+            <p style="font-size:11px; color:#66ccff; margin-bottom:12px;">Defina sua nova senha:</p>
+            <input type="password" id="resetNovaSenha" placeholder="NOVA SENHA" maxlength="64">
         </div>
 
         <!-- Nome do convidado -->
@@ -528,6 +610,9 @@
     <div id="gameUI">
         <div id="gameCanvasWrapper">
             <canvas id="gameCanvas" width="400" height="300"></canvas>
+            <!-- Flash de teleporte (fade) sobreposto ao canvas -->
+            <div id="tpFlash"></div>
+            <div id="tpLabel">⚡ TELEPORTADO</div>
             <div id="mobileControls">
                 <div id="dpad">
                     <button id="btn-up"    class="dpad-btn">▲</button>
@@ -574,9 +659,10 @@
             <button onclick="toggleSocial()" class="social-close">&#10005;</button>
         </div>
 
-        <!-- Favoritar sala atual -->
+        <!-- Favoritar + Like da sala atual -->
         <div class="social-secao">
             <button id="btnFavSala" onclick="toggleFavoritoSalaAtual()">☆ FAVORITAR ESTA SALA</button>
+            <button id="btnLikeSala" onclick="toggleLikeSalaAtual()">♡ <span id="likeCount">0</span> LIKES</button>
         </div>
 
         <!-- Pedidos de amizade recebidos -->

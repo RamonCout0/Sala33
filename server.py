@@ -94,7 +94,25 @@ class Banco:
                     password_hash VARCHAR(200) NOT NULL,
                     sprite_id VARCHAR(40) DEFAULT 'cinzaguy',
                     bio TEXT DEFAULT '',
+                    email VARCHAR(120) DEFAULT '',
                     created_at TIMESTAMPTZ DEFAULT NOW()
+                );
+                -- email opcional: pode ser adicionado a tabelas antigas
+                ALTER TABLE users ADD COLUMN IF NOT EXISTS email VARCHAR(120) DEFAULT '';
+                CREATE TABLE IF NOT EXISTS password_resets (
+                    id SERIAL PRIMARY KEY,
+                    user_id INTEGER REFERENCES users(id) ON DELETE CASCADE,
+                    token VARCHAR(80) NOT NULL,
+                    expires_at TIMESTAMPTZ NOT NULL,
+                    usado BOOLEAN DEFAULT FALSE,
+                    created_at TIMESTAMPTZ DEFAULT NOW()
+                );
+                CREATE TABLE IF NOT EXISTS room_likes (
+                    id SERIAL PRIMARY KEY,
+                    user_id INTEGER REFERENCES users(id) ON DELETE CASCADE,
+                    room_id VARCHAR(60) NOT NULL,
+                    created_at TIMESTAMPTZ DEFAULT NOW(),
+                    UNIQUE(user_id, room_id)
                 );
                 CREATE TABLE IF NOT EXISTS friendships (
                     id SERIAL PRIMARY KEY,
@@ -129,16 +147,18 @@ class Banco:
                 CREATE INDEX IF NOT EXISTS idx_fav_user ON favorite_rooms(user_id);
                 CREATE INDEX IF NOT EXISTS idx_req_to ON friend_requests(to_id);
                 CREATE INDEX IF NOT EXISTS idx_req_from ON friend_requests(from_id);
+                CREATE INDEX IF NOT EXISTS idx_like_room ON room_likes(room_id);
+                CREATE INDEX IF NOT EXISTS idx_reset_token ON password_resets(token);
             """)
 
     # ---- Auth ----
-    async def criar_usuario(self, username, password_hash):
+    async def criar_usuario(self, username, password_hash, email=""):
         if not self.ativo: return None
         try:
             row = await self.pool.fetchrow(
-                "INSERT INTO users(username,password_hash) VALUES($1,$2) "
-                "RETURNING id,username,sprite_id,bio",
-                username, password_hash)
+                "INSERT INTO users(username,password_hash,email) VALUES($1,$2,$3) "
+                "RETURNING id,username,sprite_id,bio,email",
+                username, password_hash, email or "")
             return dict(row) if row else None
         except Exception:
             return None  # username duplicado ou erro
@@ -289,6 +309,92 @@ class Banco:
         except Exception:
             return None
 
+    # ---- Reset de senha (estrutura pronta; envio de email plugável) ----
+    async def criar_token_reset(self, username):
+        """Gera token de reset pra um usuário. Retorna (user, token) ou (None, None).
+        Resposta neutra do lado do handler: nunca revela se o usuário existe."""
+        if not self.ativo: return (None, None)
+        try:
+            user = await self.buscar_usuario(username)
+            if not user:
+                return (None, None)
+            token = base64.urlsafe_b64encode(os.urandom(32)).rstrip(b"=").decode()
+            # Token expira em 1 hora
+            await self.pool.execute(
+                "INSERT INTO password_resets(user_id, token, expires_at) "
+                "VALUES($1, $2, NOW() + INTERVAL '1 hour')",
+                user["id"], token)
+            return (user, token)
+        except Exception:
+            return (None, None)
+
+    async def validar_token_reset(self, token):
+        """Retorna user_id se o token for válido e não usado/expirado, senão None."""
+        if not self.ativo: return None
+        try:
+            row = await self.pool.fetchrow(
+                "SELECT user_id FROM password_resets "
+                "WHERE token=$1 AND usado=FALSE AND expires_at > NOW()", token)
+            return row["user_id"] if row else None
+        except Exception:
+            return None
+
+    async def aplicar_reset(self, token, novo_hash):
+        """Troca a senha se o token for válido. Marca token como usado."""
+        if not self.ativo: return False
+        try:
+            user_id = await self.validar_token_reset(token)
+            if not user_id:
+                return False
+            async with self.pool.acquire() as c:
+                async with c.transaction():
+                    await c.execute(
+                        "UPDATE users SET password_hash=$2 WHERE id=$1", user_id, novo_hash)
+                    await c.execute(
+                        "UPDATE password_resets SET usado=TRUE WHERE token=$1", token)
+            return True
+        except Exception:
+            return False
+
+    # ---- Likes de sala (global, 1 like por user por sala) ----
+    async def contar_likes(self, room_id):
+        if not self.ativo: return 0
+        try:
+            n = await self.pool.fetchval(
+                "SELECT COUNT(*) FROM room_likes WHERE room_id=$1", room_id)
+            return int(n or 0)
+        except Exception:
+            return 0
+
+    async def usuario_curtiu(self, user_id, room_id):
+        if not self.ativo: return False
+        try:
+            r = await self.pool.fetchval(
+                "SELECT 1 FROM room_likes WHERE user_id=$1 AND room_id=$2", user_id, room_id)
+            return bool(r)
+        except Exception:
+            return False
+
+    async def toggle_like(self, user_id, room_id):
+        """Curte/descurte. Retorna (curtiu_bool, total_likes)."""
+        if not self.ativo: return (None, 0)
+        try:
+            existe = await self.pool.fetchval(
+                "SELECT 1 FROM room_likes WHERE user_id=$1 AND room_id=$2", user_id, room_id)
+            if existe:
+                await self.pool.execute(
+                    "DELETE FROM room_likes WHERE user_id=$1 AND room_id=$2", user_id, room_id)
+                curtiu = False
+            else:
+                await self.pool.execute(
+                    "INSERT INTO room_likes(user_id,room_id) VALUES($1,$2) ON CONFLICT DO NOTHING",
+                    user_id, room_id)
+                curtiu = True
+            total = await self.contar_likes(room_id)
+            return (curtiu, total)
+        except Exception:
+            return (None, 0)
+
     # ---- Logs (fire-and-forget) ----
     def log(self, user_id, username, action, room_id=None):
         if not self.ativo: return
@@ -366,6 +472,56 @@ def verificar_senha(senha: str, stored: str) -> bool:
 
 
 # ──────────────────────────────────────────────────────────────
+#   ENVIO DE EMAIL DE RESET (stub — integração futura)
+#
+#   Hoje só registra no log do servidor. Quando quiser ativar o
+#   envio real, basta preencher esta função com SMTP (Gmail, etc).
+#   O resto do fluxo (token, validação, troca de senha) já funciona.
+#
+#   Exemplo de como ativar via Gmail SMTP no futuro:
+#     import smtplib
+#     from email.message import EmailMessage
+#     msg = EmailMessage()
+#     msg["Subject"] = "Recuperação de senha — Sala 33"
+#     msg["From"] = os.environ["SMTP_FROM"]
+#     msg["To"] = email
+#     msg.set_content(f"Use este link: https://sala33.app.br/?reset={token}")
+#     with smtplib.SMTP_SSL("smtp.gmail.com", 465) as srv:
+#         srv.login(os.environ["SMTP_USER"], os.environ["SMTP_PASS"])
+#         srv.send_message(msg)
+# ──────────────────────────────────────────────────────────────
+SMTP_ATIVO = bool(os.environ.get("SMTP_USER") and os.environ.get("SMTP_PASS"))
+
+def enviar_email_reset(email: str, username: str, token: str) -> bool:
+    """Envia (ou registra) o link de reset. Retorna True se 'enviou'.
+    Por enquanto só loga no console — integração SMTP fica pra depois."""
+    link = f"https://sala33.app.br/?reset={token}"
+    if not SMTP_ATIVO:
+        # Modo dev/atual: só imprime no log. NUNCA expõe o token ao cliente.
+        print(f"[reset] (email desativado) {username} <{email or 'sem email'}> → {link}")
+        return False
+    # TODO: quando SMTP_USER/SMTP_PASS estiverem definidos, enviar de verdade aqui.
+    try:
+        import smtplib
+        from email.message import EmailMessage
+        msg = EmailMessage()
+        msg["Subject"] = "Recuperação de senha — Sala 33"
+        msg["From"] = os.environ.get("SMTP_FROM", os.environ["SMTP_USER"])
+        msg["To"] = email
+        msg.set_content(
+            f"Olá, {username}!\n\nVocê pediu pra redefinir sua senha na Sala 33.\n"
+            f"Use o link abaixo (válido por 1 hora):\n\n{link}\n\n"
+            f"Se não foi você, ignore este email.")
+        with smtplib.SMTP_SSL("smtp.gmail.com", 465) as srv:
+            srv.login(os.environ["SMTP_USER"], os.environ["SMTP_PASS"])
+            srv.send_message(msg)
+        return True
+    except Exception as e:
+        print(f"[reset] falha ao enviar email: {e}")
+        return False
+
+
+# ──────────────────────────────────────────────────────────────
 #   MANIFEST & CONFIG
 # ──────────────────────────────────────────────────────────────
 def _ler_json(path, fallback):
@@ -395,6 +551,7 @@ RATE_LIMIT_WIN   = 1.0
 MOVE_RATE_LIMIT = 0.05
 MOVE_EPSILON = 0.50
 USERNAME_RE      = re.compile(r"^[A-Za-z0-9_\- ]+$")
+EMAIL_RE         = re.compile(r"^[^@\s]+@[^@\s]+\.[^@\s]+$")
 LADOS_VALIDOS    = {"esquerda", "direita"}
 
 def _lado(v):   return v if v in LADOS_VALIDOS else "direita"
@@ -402,6 +559,9 @@ def _sprite(v): return v if v in SPRITES_VALIDOS else "cinzaguy"
 def _sanitize_username(v):
     v = str(v).strip()[:MAX_USERNAME_LEN].upper()
     return v if v and USERNAME_RE.match(v) else None
+def _sanitize_email(v):
+    v = str(v or "").strip()[:120]
+    return v if v and EMAIL_RE.match(v) else None
 
 
 # ──────────────────────────────────────────────────────────────
@@ -674,13 +834,14 @@ async def handler_ws(websocket, hub):
             if tipo == "registrar":
                 username = _sanitize_username(d.get("username"))
                 senha = str(d.get("password", ""))
+                email = _sanitize_email(d.get("email")) or ""  # opcional
                 if not username:
                     await s.enviar({"tipo":"auth_erro","mensagem":"Nome inválido."}); continue
                 if len(senha) < 6:
                     await s.enviar({"tipo":"auth_erro","mensagem":"Senha precisa de 6+ caracteres."}); continue
                 if not banco.ativo:
                     await s.enviar({"tipo":"auth_erro","mensagem":"Cadastro indisponível. Entre como convidado."}); continue
-                user = await banco.criar_usuario(username, hash_senha(senha))
+                user = await banco.criar_usuario(username, hash_senha(senha), email)
                 if not user:
                     await s.enviar({"tipo":"auth_erro","mensagem":"Nome já cadastrado."}); continue
                 token = gerar_token(user["id"], user["username"])
@@ -688,6 +849,36 @@ async def handler_ws(websocket, hub):
                     "id":user["id"],"username":user["username"],
                     "sprite_id":user["sprite_id"],"bio":user.get("bio","")}})
                 banco.log(user["id"], user["username"], "register")
+                continue
+
+            # ═══ RESET DE SENHA — solicitar (gera token, "envia" email) ══
+            if tipo == "solicitar_reset":
+                username = _sanitize_username(d.get("username"))
+                # Resposta SEMPRE neutra: nunca revela se o usuário existe
+                resposta_neutra = {"tipo":"reset_solicitado",
+                    "mensagem":"Se a conta existir, enviamos instruções de recuperação."}
+                if not banco.ativo or not username:
+                    await s.enviar(resposta_neutra); continue
+                user, token = await banco.criar_token_reset(username)
+                if user and token:
+                    enviar_email_reset(user.get("email",""), user["username"], token)
+                    banco.log(user["id"], user["username"], "reset_request")
+                await s.enviar(resposta_neutra)
+                continue
+
+            # ═══ RESET DE SENHA — aplicar (com token válido) ════════
+            if tipo == "aplicar_reset":
+                token_reset = str(d.get("token", ""))
+                nova_senha = str(d.get("password", ""))
+                if not banco.ativo:
+                    await s.enviar({"tipo":"reset_erro","mensagem":"Indisponível."}); continue
+                if len(nova_senha) < 6:
+                    await s.enviar({"tipo":"reset_erro","mensagem":"Senha precisa de 6+ caracteres."}); continue
+                ok = await banco.aplicar_reset(token_reset, hash_senha(nova_senha)) if token_reset else False
+                if ok:
+                    await s.enviar({"tipo":"reset_ok","mensagem":"Senha redefinida! Faça login."})
+                else:
+                    await s.enviar({"tipo":"reset_erro","mensagem":"Link inválido ou expirado."})
                 continue
 
             if tipo == "autenticar":
@@ -886,6 +1077,26 @@ async def handler_ws(websocket, hub):
                     if room:
                         estado = await banco.toggle_favorito(s.user_id, room)
                         await s.enviar({"tipo":"favorito_estado","room_id":room,"favoritado":estado})
+                continue
+
+            # ═══ LIKE na sala (global) ════════════════════════
+            if tipo == "toggle_like":
+                if s.user_id:
+                    room = str(d.get("room_id",""))[:60]
+                    if room:
+                        curtiu, total = await banco.toggle_like(s.user_id, room)
+                        await s.enviar({"tipo":"like_estado","room_id":room,
+                                        "curtiu":curtiu,"total":total})
+                continue
+
+            # ═══ Pedir estado da sala (likes + se curti/favoritei) ═══
+            if tipo == "estado_sala":
+                room = str(d.get("room_id",""))[:60]
+                if room:
+                    total = await banco.contar_likes(room)
+                    curtiu = await banco.usuario_curtiu(s.user_id, room) if s.user_id else False
+                    await s.enviar({"tipo":"like_estado","room_id":room,
+                                    "curtiu":curtiu,"total":total})
                 continue
 
             # ═══ MOVER ══════════════════════════════════════════
