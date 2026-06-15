@@ -492,15 +492,9 @@ def verificar_senha(senha: str, stored: str) -> bool:
 # ──────────────────────────────────────────────────────────────
 SMTP_ATIVO = bool(os.environ.get("SMTP_USER") and os.environ.get("SMTP_PASS"))
 
-def enviar_email_reset(email: str, username: str, token: str) -> bool:
-    """Envia (ou registra) o link de reset. Retorna True se 'enviou'.
-    Por enquanto só loga no console — integração SMTP fica pra depois."""
+def _enviar_email_reset_thread(email: str, username: str, token: str):
+    """Executa o envio SMTP em thread separada — não bloqueia o loop de jogo."""
     link = f"https://sala33.app.br/?reset={token}"
-    if not SMTP_ATIVO:
-        # Modo dev/atual: só imprime no log. NUNCA expõe o token ao cliente.
-        print(f"[reset] (email desativado) {username} <{email or 'sem email'}> → {link}")
-        return False
-    # TODO: quando SMTP_USER/SMTP_PASS estiverem definidos, enviar de verdade aqui.
     try:
         import smtplib
         from email.message import EmailMessage
@@ -515,11 +509,21 @@ def enviar_email_reset(email: str, username: str, token: str) -> bool:
         with smtplib.SMTP_SSL("smtp.gmail.com", 465) as srv:
             srv.login(os.environ["SMTP_USER"], os.environ["SMTP_PASS"])
             srv.send_message(msg)
-        return True
+        print(f"[reset] email enviado para {username} <{email}>")
     except Exception as e:
         print(f"[reset] falha ao enviar email: {e}")
-        return False
 
+        def enviar_email_reset(email: str, username: str, token: str) -> bool:
+            """Dispara o envio em background (fire-and-forget). Retorna imediatamente."""
+            link = f"https://sala33.app.br/?reset={token}"
+            if not SMTP_ATIVO:
+                print(f"[reset] (email desativado) {username} <{email or 'sem email'}> → {link}")
+                return False
+            if not email:
+                print(f"[reset] usuário {username} não tem email cadastrado")
+                return False
+            threading.Thread(target=_enviar_email_reset_thread, args=(email, username, token), daemon=True).start()
+            return True
 
 # ──────────────────────────────────────────────────────────────
 #   MANIFEST & CONFIG
