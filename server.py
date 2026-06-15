@@ -481,7 +481,7 @@ def _enviar_email_reset_thread(email: str, username: str, token: str):
     import urllib.request
     import json
     
-    link = f"https://sala33.app.br/?reset={token}"
+    link = f"https://sala33.app.br/reset.html?token={token}"
     api_key = os.environ.get("BREVO_API_KEY")
     
     url = "https://api.brevo.com/v3/smtp/email"
@@ -514,7 +514,7 @@ def _enviar_email_reset_thread(email: str, username: str, token: str):
 
 def enviar_email_reset(email: str, username: str, token: str) -> bool:
     """Dispara o envio em background (fire-and-forget)."""
-    link = f"https://sala33.app.br/?reset={token}"
+    link = f"https://sala33.app.br/reset.html?token={token}"
     if not EMAIL_ATIVO:
         print(f"[reset] (email desativado) {username} <{email or 'sem email'}> → {link}")
         return False

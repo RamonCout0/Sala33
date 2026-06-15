@@ -281,21 +281,10 @@ async function inicializar() {
         Wasm.init(); // async, sem bloquear — fallback JS ativo enquanto carrega
 
         btn.disabled = false;
-        // Se estamos no modo reset, mantém o texto correto após loading
-        if (modoAuth === "reset_aplicar") {
-            btn.textContent = "REDEFINIR SENHA";
-        } else {
-            btn.textContent = "ENTRAR";
-        }
+        btn.textContent = "ENTRAR";
     } catch (e) {
         console.error("Erro ao carregar configs:", e);
-        // No modo reset, permite continuar mesmo com erro de loading (sprites são opcionais)
-        if (modoAuth === "reset_aplicar") {
-            btn.disabled = false;
-            btn.textContent = "REDEFINIR SENHA";
-        } else {
-            btn.textContent = "ERRO — VEJA O CONSOLE";
-        }
+        btn.textContent = "ERRO — VEJA O CONSOLE";
     }
 }
 
@@ -456,10 +445,9 @@ window.enviarEmote = enviarEmote;
 //   Abas no menu: convidado | entrar | criar conta.
 //   Auth acontece via WebSocket (registrar / autenticar).
 // =====================================================
-let modoAuth = "convidado";          // convidado | entrar | criar | esqueci | reset_aplicar
+let modoAuth = "convidado";          // convidado | entrar | criar | esqueci
 let tokenConta = null;               // JWT salvo após login/registro
 let wsAuth = null;                   // socket temporário só pra auth
-let _resetToken = null;              // token de reset vindo da URL (?reset=...)
 
 function _authMsg(texto, tipo) {
     const el = document.getElementById("authMsg");
@@ -472,27 +460,23 @@ function _authMsg(texto, tipo) {
 function trocarAba(modo) {
     modoAuth = modo;
     _authMsg("", "");
-    // Só as 3 abas principais ficam destacadas; esqueci/reset_aplicar não têm aba
     document.querySelectorAll(".auth-tab").forEach(t => {
         t.classList.toggle("ativa", t.dataset.modo === modo);
     });
-    const contaFields   = document.getElementById("contaFields");
-    const guestField    = document.getElementById("username");
-    const seletorSkin   = document.querySelector(".selector-container");
-    const emailField    = document.getElementById("contaEmail");
-    const linkEsqueci   = document.getElementById("linkEsqueciSenha");
-    const resetFields   = document.getElementById("resetFields");
-    const resetAplicar  = document.getElementById("resetAplicarFields");
-    const btn           = document.getElementById("btnEntrar");
+    const contaFields = document.getElementById("contaFields");
+    const guestField  = document.getElementById("username");
+    const seletorSkin = document.querySelector(".selector-container");
+    const emailField  = document.getElementById("contaEmail");
+    const linkEsqueci = document.getElementById("linkEsqueciSenha");
+    const resetFields = document.getElementById("resetFields");
+    const btn         = document.getElementById("btnEntrar");
 
-    // Esconde tudo que é condicional; cada modo religa o que precisa
-    contaFields.style.display  = "none";
-    guestField.style.display   = "none";
+    contaFields.style.display = "none";
+    guestField.style.display  = "none";
     if (seletorSkin) seletorSkin.style.display = "none";
-    if (emailField)   emailField.style.display  = "none";
-    if (linkEsqueci)  linkEsqueci.style.display = "none";
-    if (resetFields)  resetFields.style.display = "none";
-    if (resetAplicar) resetAplicar.style.display = "none";
+    if (emailField)  emailField.style.display  = "none";
+    if (linkEsqueci) linkEsqueci.style.display = "none";
+    if (resetFields) resetFields.style.display = "none";
 
     if (modo === "convidado") {
         guestField.style.display = "block";
@@ -510,9 +494,6 @@ function trocarAba(modo) {
     } else if (modo === "esqueci") {
         if (resetFields) resetFields.style.display = "block";
         btn.textContent = "ENVIAR RECUPERAÇÃO";
-    } else if (modo === "reset_aplicar") {
-        if (resetAplicar) resetAplicar.style.display = "block";
-        btn.textContent = "REDEFINIR SENHA";
     }
 }
 window.trocarAba = trocarAba;
@@ -533,8 +514,6 @@ function acaoMenu() {
         autenticarOuCriar(modoAuth === "criar" ? "registrar" : "autenticar");
     } else if (modoAuth === "esqueci") {
         solicitarReset();
-    } else if (modoAuth === "reset_aplicar") {
-        aplicarReset();
     }
 }
 window.acaoMenu = acaoMenu;
@@ -571,36 +550,6 @@ function solicitarReset() {
     });
 }
 window.solicitarReset = solicitarReset;
-
-// Aplica nova senha usando o token que veio na URL (?reset=...)
-function aplicarReset() {
-    const novaSenha     = document.getElementById("resetNovaSenha").value;
-    const confirmarSenha = document.getElementById("resetConfirmarSenha").value;
-    if (novaSenha.length < 6) return _authMsg("Senha precisa de 6+ caracteres.", "erro");
-    if (novaSenha !== confirmarSenha) return _authMsg("As senhas não coincidem.", "erro");
-    if (!_resetToken) return _authMsg("Token ausente. Use o link do email.", "erro");
-    const btn = document.getElementById("btnEntrar");
-    btn.disabled = true; btn.textContent = "REDEFININDO...";
-    _authSocket({ tipo: "aplicar_reset", token: _resetToken, password: novaSenha }, (dados, sock) => {
-        if (dados.tipo === "reset_ok") {
-            _authMsg(dados.mensagem || "Senha redefinida! Faça login.", "ok");
-            sock.close();
-            _resetToken = null;
-            // Limpa o ?reset= da URL e volta pro login
-            history.replaceState(null, "", location.pathname);
-            btn.disabled = false;
-            setTimeout(() => trocarAba("entrar"), 1500);
-        } else if (dados.tipo === "reset_erro") {
-            _authMsg(dados.mensagem || "Link inválido ou expirado.", "erro");
-            sock.close();
-            btn.disabled = false; btn.textContent = "REDEFINIR SENHA";
-        } else if (dados.tipo === "_erro_conexao") {
-            _authMsg("Erro de conexão.", "erro");
-            btn.disabled = false; btn.textContent = "REDEFINIR SENHA";
-        }
-    });
-}
-window.aplicarReset = aplicarReset;
 
 // Faz registro OU login via WebSocket dedicado, salva token e entra no jogo
 function autenticarOuCriar(tipo) {
@@ -1925,13 +1874,4 @@ function loop(timestamp) {
 // =====================================================
 //   BOOT
 // =====================================================
-window.addEventListener("DOMContentLoaded", () => {
-    // Detecta ?reset=TOKEN ANTES da inicialização async.
-    // Se inicializar() falhar por qualquer motivo, a tela de reset ainda aparece.
-    const resetTok = new URLSearchParams(location.search).get("reset");
-    if (resetTok) {
-        _resetToken = resetTok;
-        trocarAba("reset_aplicar");
-    }
-    inicializar();
-});
+window.addEventListener("DOMContentLoaded", inicializar);
