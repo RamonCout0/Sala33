@@ -49,10 +49,6 @@ JWT_SECRET    = os.environ.get("JWT_SECRET", "sala33-dev-secret-troque-em-prod")
 
 # ──────────────────────────────────────────────────────────────
 #   BANCO DE DADOS — opcional, isolado, não-bloqueante
-#
-#   Toda função de banco é "best-effort": se o pool estiver
-#   indisponível, retorna None/False sem lançar exceção e sem
-#   travar o loop de jogo.
 # ──────────────────────────────────────────────────────────────
 class Banco:
     def __init__(self):
@@ -61,7 +57,6 @@ class Banco:
         self._log_queue = asyncio.Queue(maxsize=2000)
 
     async def conectar(self):
-        """Tenta conectar. Se falhar, marca como inativo e segue a vida."""
         if not DATABASE_URL:
             print("[db] DATABASE_URL não definida — modo sem banco (convidado apenas).")
             return
@@ -97,7 +92,6 @@ class Banco:
                     email VARCHAR(120) DEFAULT '',
                     created_at TIMESTAMPTZ DEFAULT NOW()
                 );
-                -- email opcional: pode ser adicionado a tabelas antigas
                 ALTER TABLE users ADD COLUMN IF NOT EXISTS email VARCHAR(120) DEFAULT '';
                 CREATE TABLE IF NOT EXISTS password_resets (
                     id SERIAL PRIMARY KEY,
@@ -161,13 +155,13 @@ class Banco:
                 username, password_hash, email or "")
             return dict(row) if row else None
         except Exception:
-            return None  # username duplicado ou erro
+            return None
 
     async def buscar_usuario(self, username):
         if not self.ativo: return None
         try:
             row = await self.pool.fetchrow(
-                "SELECT id,username,password_hash,sprite_id,bio FROM users WHERE username=$1",
+                "SELECT id,username,password_hash,sprite_id,bio,email FROM users WHERE username=$1",
                 username)
             return dict(row) if row else None
         except Exception:
@@ -206,14 +200,12 @@ class Banco:
             return False
 
     async def criar_pedido_amizade(self, from_id, to_username):
-        """Cria pedido pendente. Retorna dict do alvo, 'ja_amigos', 'self', 'inexistente', ou None."""
         if not self.ativo: return None
         try:
             alvo = await self.buscar_usuario(to_username)
             if not alvo: return "inexistente"
             if alvo["id"] == from_id: return "self"
             if await self.sao_amigos(from_id, alvo["id"]): return "ja_amigos"
-            # Se o alvo já me mandou pedido, aceita direto (vira amizade mútua)
             reverso = await self.pool.fetchval(
                 "SELECT 1 FROM friend_requests WHERE from_id=$1 AND to_id=$2",
                 alvo["id"], from_id)
@@ -228,7 +220,6 @@ class Banco:
             return None
 
     async def listar_pedidos_recebidos(self, user_id):
-        """Pedidos pendentes que EU recebi."""
         if not self.ativo: return []
         try:
             rows = await self.pool.fetch(
@@ -240,10 +231,8 @@ class Banco:
             return []
 
     async def aceitar_pedido(self, user_id, from_id):
-        """user_id aceita o pedido de from_id. Cria amizade mútua (2 linhas)."""
         if not self.ativo: return False
         try:
-            # Confirma que o pedido existe
             existe = await self.pool.fetchval(
                 "SELECT 1 FROM friend_requests WHERE from_id=$1 AND to_id=$2", from_id, user_id)
             if not existe: return False
@@ -272,7 +261,6 @@ class Banco:
             return False
 
     async def remover_amigo(self, user_id, friend_id):
-        """Remove amizade dos DOIS lados."""
         if not self.ativo: return False
         try:
             await self.pool.execute(
@@ -293,7 +281,6 @@ class Banco:
             return []
 
     async def toggle_favorito(self, user_id, room_id):
-        """Adiciona se não existe, remove se existe. Retorna o novo estado."""
         if not self.ativo: return None
         try:
             existe = await self.pool.fetchval(
@@ -309,17 +296,14 @@ class Banco:
         except Exception:
             return None
 
-    # ---- Reset de senha (estrutura pronta; envio de email plugável) ----
+    # ---- Reset de senha ----
     async def criar_token_reset(self, username):
-        """Gera token de reset pra um usuário. Retorna (user, token) ou (None, None).
-        Resposta neutra do lado do handler: nunca revela se o usuário existe."""
         if not self.ativo: return (None, None)
         try:
             user = await self.buscar_usuario(username)
             if not user:
                 return (None, None)
             token = base64.urlsafe_b64encode(os.urandom(32)).rstrip(b"=").decode()
-            # Token expira em 1 hora
             await self.pool.execute(
                 "INSERT INTO password_resets(user_id, token, expires_at) "
                 "VALUES($1, $2, NOW() + INTERVAL '1 hour')",
@@ -329,7 +313,6 @@ class Banco:
             return (None, None)
 
     async def validar_token_reset(self, token):
-        """Retorna user_id se o token for válido e não usado/expirado, senão None."""
         if not self.ativo: return None
         try:
             row = await self.pool.fetchrow(
@@ -340,7 +323,6 @@ class Banco:
             return None
 
     async def aplicar_reset(self, token, novo_hash):
-        """Troca a senha se o token for válido. Marca token como usado."""
         if not self.ativo: return False
         try:
             user_id = await self.validar_token_reset(token)
@@ -356,7 +338,7 @@ class Banco:
         except Exception:
             return False
 
-    # ---- Likes de sala (global, 1 like por user por sala) ----
+    # ---- Likes de sala ----
     async def contar_likes(self, room_id):
         if not self.ativo: return 0
         try:
@@ -376,7 +358,6 @@ class Banco:
             return False
 
     async def toggle_like(self, user_id, room_id):
-        """Curte/descurte. Retorna (curtiu_bool, total_likes)."""
         if not self.ativo: return (None, 0)
         try:
             existe = await self.pool.fetchval(
@@ -413,7 +394,7 @@ class Banco:
                     "INSERT INTO session_logs(user_id,username,action,room_id) VALUES($1,$2,$3,$4)",
                     batch)
             except Exception:
-                await asyncio.sleep(2)  # erro? espera e continua
+                await asyncio.sleep(2)
 
 
 banco = Banco()
@@ -472,23 +453,7 @@ def verificar_senha(senha: str, stored: str) -> bool:
 
 
 # ──────────────────────────────────────────────────────────────
-#   ENVIO DE EMAIL DE RESET (stub — integração futura)
-#
-#   Hoje só registra no log do servidor. Quando quiser ativar o
-#   envio real, basta preencher esta função com SMTP (Gmail, etc).
-#   O resto do fluxo (token, validação, troca de senha) já funciona.
-#
-#   Exemplo de como ativar via Gmail SMTP no futuro:
-#     import smtplib
-#     from email.message import EmailMessage
-#     msg = EmailMessage()
-#     msg["Subject"] = "Recuperação de senha — Sala 33"
-#     msg["From"] = os.environ["SMTP_FROM"]
-#     msg["To"] = email
-#     msg.set_content(f"Use este link: https://sala33.app.br/?reset={token}")
-#     with smtplib.SMTP_SSL("smtp.gmail.com", 465) as srv:
-#         srv.login(os.environ["SMTP_USER"], os.environ["SMTP_PASS"])
-#         srv.send_message(msg)
+#   ENVIO DE EMAIL DE RESET — Gmail SMTP em thread separada
 # ──────────────────────────────────────────────────────────────
 SMTP_ATIVO = bool(os.environ.get("SMTP_USER") and os.environ.get("SMTP_PASS"))
 
@@ -517,13 +482,14 @@ def enviar_email_reset(email: str, username: str, token: str) -> bool:
     """Dispara o envio em background (fire-and-forget). Retorna imediatamente."""
     link = f"https://sala33.app.br/?reset={token}"
     if not SMTP_ATIVO:
-            print(f"[reset] (email desativado) {username} <{email or 'sem email'}> → {link}")
-            return False
-            if not email:
-                print(f"[reset] usuário {username} não tem email cadastrado")
-                return False
-            threading.Thread(target=_enviar_email_reset_thread, args=(email, username, token), daemon=True).start()
-            return True
+        print(f"[reset] (email desativado) {username} <{email or 'sem email'}> → {link}")
+        return False
+    if not email:
+        print(f"[reset] usuário {username} não tem email cadastrado")
+        return False
+    threading.Thread(target=_enviar_email_reset_thread, args=(email, username, token), daemon=True).start()
+    return True
+
 
 # ──────────────────────────────────────────────────────────────
 #   MANIFEST & CONFIG
@@ -552,8 +518,8 @@ MAX_CHAT_LEN     = 200
 MAX_USERNAME_LEN = 16
 RATE_LIMIT_MSGS  = 30
 RATE_LIMIT_WIN   = 1.0
-MOVE_RATE_LIMIT = 0.05
-MOVE_EPSILON = 0.50
+MOVE_RATE_LIMIT  = 0.05
+MOVE_EPSILON     = 0.50
 USERNAME_RE      = re.compile(r"^[A-Za-z0-9_\- ]+$")
 EMAIL_RE         = re.compile(r"^[^@\s]+@[^@\s]+\.[^@\s]+$")
 LADOS_VALIDOS    = {"esquerda", "direita"}
@@ -573,26 +539,10 @@ def _sanitize_email(v):
 # ──────────────────────────────────────────────────────────────
 class Sessao:
     __slots__ = (
-        "sid",
-        "ws",
-        "queue",
-        "user_id",
-        "username",
-        "sala",
-        "x",
-        "y",
-        "sprite_id",
-        "lado",
-        "logado",
-
-        # otimizações de movimento
-        "last_move",
-        "last_broadcast_x",
-        "last_broadcast_y",
+        "sid", "ws", "queue", "user_id", "username", "sala",
+        "x", "y", "sprite_id", "lado", "logado",
+        "last_move", "last_broadcast_x", "last_broadcast_y",
     )
-
-
-
 
     def __init__(self, ws):
         self.sid      = str(uuid.uuid4())
@@ -606,7 +556,6 @@ class Sessao:
         self.user_id  = None
         self.username = "ANÔNIMO"
         self.sala     = None
-        
         self.sprite_id = "cinzaguy"
         self.lado     = "direita"
         self.logado   = False
@@ -647,13 +596,11 @@ class Hub:
         return any(s.logado and s.username == username for s in self._sessions.values())
 
     def sessoes_do_usuario(self, user_id):
-        """Todas as sessões online de um user_id (pode ter mais de uma aba)."""
         if user_id is None:
             return []
         return [s for s in self._sessions.values() if s.user_id == user_id and s.logado]
 
     def usuarios_online_ids(self):
-        """Set de user_ids logados com conta agora."""
         return {s.user_id for s in self._sessions.values() if s.user_id and s.logado}
 
     async def mover_para_sala(self, sid, nova_sala):
@@ -691,7 +638,7 @@ class Hub:
 
 
 # ──────────────────────────────────────────────────────────────
-#   SERVER MODS (compat com server_mods/*.py)
+#   SERVER MODS
 # ──────────────────────────────────────────────────────────────
 HANDLERS_POR_TIPO, MODS_COM_TICK, MODS_COM_LEAVE, MOD_SALA = {}, [], [], {}
 
@@ -788,7 +735,6 @@ async def loop_minigames(hub):
 #   HANDLER WEBSOCKET
 # ──────────────────────────────────────────────────────────────
 async def _notificar_amigos_atualizados(hub, user_id):
-    """Reenvia a lista de amigos + pedidos pra todas as sessões online do user_id."""
     sessoes = hub.sessoes_do_usuario(user_id)
     if not sessoes:
         return
@@ -809,7 +755,6 @@ async def escritor(s):
         pass
 
 async def handler_ws(websocket, hub):
-
     try:
         s = Sessao(websocket)
     except Exception as e:
@@ -834,11 +779,11 @@ async def handler_ws(websocket, hub):
             tipo = d.get("tipo")
             if not isinstance(tipo, str): continue
 
-            # ═══ AUTENTICAÇÃO (via WebSocket) ═══════════════════
+            # ═══ AUTENTICAÇÃO ═══════════════════════════════════
             if tipo == "registrar":
                 username = _sanitize_username(d.get("username"))
                 senha = str(d.get("password", ""))
-                email = _sanitize_email(d.get("email")) or ""  # opcional
+                email = _sanitize_email(d.get("email")) or ""
                 if not username:
                     await s.enviar({"tipo":"auth_erro","mensagem":"Nome inválido."}); continue
                 if len(senha) < 6:
@@ -855,10 +800,9 @@ async def handler_ws(websocket, hub):
                 banco.log(user["id"], user["username"], "register")
                 continue
 
-            # ═══ RESET DE SENHA — solicitar (gera token, "envia" email) ══
+            # ═══ RESET DE SENHA — solicitar ═════════════════════
             if tipo == "solicitar_reset":
                 username = _sanitize_username(d.get("username"))
-                # Resposta SEMPRE neutra: nunca revela se o usuário existe
                 resposta_neutra = {"tipo":"reset_solicitado",
                     "mensagem":"Se a conta existir, enviamos instruções de recuperação."}
                 if not banco.ativo or not username:
@@ -870,7 +814,7 @@ async def handler_ws(websocket, hub):
                 await s.enviar(resposta_neutra)
                 continue
 
-            # ═══ RESET DE SENHA — aplicar (com token válido) ════════
+            # ═══ RESET DE SENHA — aplicar ═══════════════════════
             if tipo == "aplicar_reset":
                 token_reset = str(d.get("token", ""))
                 nova_senha = str(d.get("password", ""))
@@ -900,7 +844,7 @@ async def handler_ws(websocket, hub):
                 banco.log(user["id"], user["username"], "login")
                 continue
 
-            # ═══ LOGIN no jogo (convidado OU autenticado) ═══════
+            # ═══ LOGIN no jogo ═══════════════════════════════════
             if tipo == "login":
                 if s.logado: continue
                 token = d.get("token")
@@ -926,7 +870,6 @@ async def handler_ws(websocket, hub):
                 ok = await hub.mover_para_sala(s.sid, SALA_INICIAL)
                 if ok:
                     outros = [o.to_dict() for o in await hub.snapshot_sala(SALA_INICIAL) if o.sid != s.sid]
-                    # Manda dados extras: favoritos e amigos (se logado via conta)
                     extras = {}
                     if s.user_id and banco.ativo:
                         extras["favoritos"] = await banco.listar_favoritos(s.user_id)
@@ -942,9 +885,9 @@ async def handler_ws(websocket, hub):
             if not s.logado:
                 continue
 
-            # ═══ PERFIL / SOCIAL (requer conta) ═════════════════
+            # ═══ PERFIL / SOCIAL ════════════════════════════════
             if tipo == "atualizar_perfil":
-                if not s.user_id: 
+                if not s.user_id:
                     await s.enviar({"tipo":"perfil_erro","mensagem":"Apenas contas podem editar perfil."}); continue
                 sprite = d.get("sprite_id")
                 bio = d.get("bio")
@@ -977,11 +920,9 @@ async def handler_ws(websocket, hub):
                     elif r == "ja_amigos":
                         await s.enviar({"tipo":"amigo_erro","mensagem":"Vocês já são amigos."})
                     elif r == "aceito_mutuo":
-                        # Ambos tinham pedido pendente → virou amizade na hora
                         await s.enviar({"tipo":"pedido_enviado","mutuo":True,"mensagem":"Agora vocês são amigos!"})
                         await _notificar_amigos_atualizados(hub, s.user_id)
                     else:
-                        # Pedido criado; notifica o alvo se estiver online
                         await s.enviar({"tipo":"pedido_enviado","mutuo":False,
                                         "mensagem":f"Pedido enviado para {r['username']}."})
                         eu = {"id": s.user_id, "username": s.username, "sprite_id": s.sprite_id}
@@ -995,7 +936,6 @@ async def handler_ws(websocket, hub):
                     if isinstance(from_id, int):
                         ok = await banco.aceitar_pedido(s.user_id, from_id)
                         if ok:
-                            # Atualiza a lista dos dois lados
                             await _notificar_amigos_atualizados(hub, s.user_id)
                             await _notificar_amigos_atualizados(hub, from_id)
                 continue
@@ -1023,7 +963,6 @@ async def handler_ws(websocket, hub):
                     fid = d.get("friend_id")
                     if not isinstance(fid, int):
                         continue
-                    # Só pode TPar se forem amigos de fato
                     if not await banco.sao_amigos(s.user_id, fid):
                         await s.enviar({"tipo":"tp_erro","mensagem":"Vocês não são amigos."}); continue
                     sessoes_amigo = hub.sessoes_do_usuario(fid)
@@ -1033,7 +972,6 @@ async def handler_ws(websocket, hub):
                     sala_alvo = alvo.sala
                     if not sala_alvo or sala_alvo not in hub.salas_disponiveis():
                         await s.enviar({"tipo":"tp_erro","mensagem":"Não foi possível localizar o amigo."}); continue
-                    # Move pra sala do amigo, na posição dele
                     sala_antiga = hub.sala_de(s.sid)
                     s.x = max(0.0, min(368.0, alvo.x))
                     s.y = max(0.0, min(268.0, alvo.y))
@@ -1047,7 +985,6 @@ async def handler_ws(websocket, hub):
                         outros = [o.to_dict() for o in await hub.snapshot_sala(sala_alvo) if o.sid != s.sid]
                         await s.enviar({"tipo":"tp_ok","sala":sala_alvo,
                                         "x":s.x,"y":s.y,"meu_sid":s.sid,"jogadores":outros})
-                        # Os outros veem o jogador chegar COM efeito de fumaça (tp=True)
                         await hub.broadcast(sala_alvo, {"tipo":"novo_jogador", "tp":True, **s.to_dict()}, exceto=s.sid)
                         banco.log(s.user_id, s.username, "tp_amigo", sala_alvo)
                 continue
@@ -1067,12 +1004,10 @@ async def handler_ws(websocket, hub):
                     sessoes_amigo = hub.sessoes_do_usuario(fid)
                     msg = {"tipo":"pv","de_id":s.user_id,"de_nome":s.username,
                            "para_id":fid,"texto":texto,"ts":int(time.time())}
-                    # Envia pro amigo (todas as abas dele)
                     entregue = False
                     for sess in sessoes_amigo:
                         await sess.enviar(msg)
                         entregue = True
-                    # Eco de volta pra mim (pra aparecer no meu chat)
                     await s.enviar({**msg, "eco":True, "entregue":entregue})
                 continue
 
@@ -1084,7 +1019,7 @@ async def handler_ws(websocket, hub):
                         await s.enviar({"tipo":"favorito_estado","room_id":room,"favoritado":estado})
                 continue
 
-            # ═══ LIKE na sala (global) ════════════════════════
+            # ═══ LIKE na sala ════════════════════════════════════
             if tipo == "toggle_like":
                 if s.user_id:
                     room = str(d.get("room_id",""))[:60]
@@ -1094,7 +1029,6 @@ async def handler_ws(websocket, hub):
                                         "curtiu":curtiu,"total":total})
                 continue
 
-            # ═══ Pedir estado da sala (likes + se curti/favoritei) ═══
             if tipo == "estado_sala":
                 room = str(d.get("room_id",""))[:60]
                 if room:
@@ -1106,58 +1040,30 @@ async def handler_ws(websocket, hub):
 
             # ═══ MOVER ══════════════════════════════════════════
             if tipo == "mover":
-
                 sala = hub.sala_de(s.sid)
-
                 if not sala:
                     continue
-
                 agora = time.monotonic()
-
-                # limite de 20 updates por segundo
                 if agora - s.last_move < MOVE_RATE_LIMIT:
                     continue
-
                 s.last_move = agora
-
                 x = d.get("x")
                 y = d.get("y")
-
                 if not isinstance(x, (int, float)):
                     continue
-
                 if not isinstance(y, (int, float)):
                     continue
-
-                novo_x = max(0.0, min(368.0, float(x)))
-                novo_y = max(0.0, min(268.0, float(y)))
-
-                s.x = novo_x
-                s.y = novo_y
-
+                s.x = max(0.0, min(368.0, float(x)))
+                s.y = max(0.0, min(268.0, float(y)))
                 s.lado = _lado(d.get("lado", s.lado))
-
                 dx = abs(s.x - s.last_broadcast_x)
                 dy = abs(s.y - s.last_broadcast_y)
-
-                # ignora micro movimentos
                 if dx < MOVE_EPSILON and dy < MOVE_EPSILON:
                     continue
-
                 s.last_broadcast_x = s.x
                 s.last_broadcast_y = s.y
-
-                await hub.broadcast(
-                    sala,
-                    {
-                        "tipo": "movimento",
-                        "id": s.sid,
-                        "x": s.x,
-                        "y": s.y,
-                        "lado": s.lado
-                    },
-                    exceto=s.sid
-                )
+                await hub.broadcast(sala, {"tipo":"movimento","id":s.sid,
+                                           "x":s.x,"y":s.y,"lado":s.lado}, exceto=s.sid)
 
             # ═══ MUDAR SALA ═════════════════════════════════════
             elif tipo == "mudar_sala":
@@ -1227,7 +1133,7 @@ async def handler_ws(websocket, hub):
 
 
 # ──────────────────────────────────────────────────────────────
-#   HTTP ESTÁTICO (porta única em produção)
+#   HTTP ESTÁTICO
 # ──────────────────────────────────────────────────────────────
 CONTENT_TYPES = {
     ".html":"text/html; charset=utf-8", ".js":"application/javascript",
@@ -1291,7 +1197,7 @@ def _ip_local():
 #   MAIN
 # ──────────────────────────────────────────────────────────────
 async def main():
-    await banco.conectar()  # tenta conectar; se falhar, segue sem banco
+    await banco.conectar()
 
     hub = Hub(MANIFEST.get("salas", []))
     carregar_server_mods()
@@ -1301,6 +1207,7 @@ async def main():
     print("="*65)
     print(f"» Modo:    {'PRODUÇÃO (porta única)' if MODO_PRODUCAO else 'LOCAL (duas portas)'}")
     print(f"» Banco:   {'PostgreSQL ✓' if banco.ativo else 'sem banco (só convidado)'}")
+    print(f"» SMTP:    {'Gmail ativo ✓' if SMTP_ATIVO else 'desativado (sem SMTP_USER/SMTP_PASS)'}")
     print(f"» Salas:   {', '.join(hub.salas_disponiveis())}")
     print(f"» Sprites: {', '.join(sorted(SPRITES_VALIDOS))}")
     if not MODO_PRODUCAO:
