@@ -1223,7 +1223,7 @@ async def main():
     print("="*65)
     print(f"» Modo:    {'PRODUÇÃO (porta única)' if MODO_PRODUCAO else 'LOCAL (duas portas)'}")
     print(f"» Banco:   {'PostgreSQL ✓' if banco.ativo else 'sem banco (só convidado)'}")
-    print(f"» SMTP:    {'Gmail ativo ✓' if SMTP_ATIVO else 'desativado (sem SMTP_USER/SMTP_PASS)'}")
+    print(f"» API Email: {'Brevo ativa ✓' if EMAIL_ATIVO else 'desativada (sem BREVO_API_KEY)'}")
     print(f"» Salas:   {', '.join(hub.salas_disponiveis())}")
     print(f"» Sprites: {', '.join(sorted(SPRITES_VALIDOS))}")
     if not MODO_PRODUCAO:
