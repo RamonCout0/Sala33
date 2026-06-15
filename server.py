@@ -1043,7 +1043,8 @@ async def handler_ws(websocket, hub):
                         outros = [o.to_dict() for o in await hub.snapshot_sala(sala_alvo) if o.sid != s.sid]
                         await s.enviar({"tipo":"tp_ok","sala":sala_alvo,
                                         "x":s.x,"y":s.y,"meu_sid":s.sid,"jogadores":outros})
-                        await hub.broadcast(sala_alvo, {"tipo":"novo_jogador", **s.to_dict()}, exceto=s.sid)
+                        # Os outros veem o jogador chegar COM efeito de fumaça (tp=True)
+                        await hub.broadcast(sala_alvo, {"tipo":"novo_jogador", "tp":True, **s.to_dict()}, exceto=s.sid)
                         banco.log(s.user_id, s.username, "tp_amigo", sala_alvo)
                 continue
 

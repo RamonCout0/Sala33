@@ -752,7 +752,7 @@ function pedirEstadoSala() {
     }
 }
 
-// Dispara a animação visual de teleporte (flash azul + label "TELEPORTADO")
+// Dispara a animação visual de teleporte (flash cinza + label "TELEPORTADO")
 function animarTeleporte() {
     const flash = document.getElementById("tpFlash");
     const label = document.getElementById("tpLabel");
@@ -766,6 +766,57 @@ function animarTeleporte() {
         void label.offsetWidth;
         label.classList.add("ativo");
     }
+}
+
+// ---------- PARTÍCULAS DE FUMAÇA (efeito de chegada por TP) ----------
+// Renderizadas no canvas. Cada nuvem é uma lista de partículas cinza
+// que sobem, expandem e somem — estilo "puff" de teleporte.
+let fumacas = [];   // [{x, y, vx, vy, vida, vidaMax, tam}]
+
+function spawnFumaca(cx, cy) {
+    // cx, cy = centro do jogador que chegou
+    const N = 14;
+    for (let i = 0; i < N; i++) {
+        const ang = (Math.PI * 2 * i) / N + Math.random() * 0.5;
+        const vel = 0.3 + Math.random() * 0.8;
+        fumacas.push({
+            x: cx + (Math.random() - 0.5) * 10,
+            y: cy + (Math.random() - 0.5) * 10,
+            vx: Math.cos(ang) * vel,
+            vy: Math.sin(ang) * vel - 0.4,   // tendência a subir
+            vida: 1.0,
+            vidaMax: 1.0,
+            decay: 0.012 + Math.random() * 0.012,
+            tam: 5 + Math.random() * 7,
+        });
+    }
+    if (fumacas.length > 200) fumacas = fumacas.slice(-200);   // teto de segurança
+}
+
+function atualizarFumacas() {
+    for (const f of fumacas) {
+        f.x += f.vx;
+        f.y += f.vy;
+        f.vy += 0.005;           // leve gravidade que desacelera a subida
+        f.vx *= 0.96;            // arrasto
+        f.tam += 0.35;           // expande
+        f.vida -= f.decay;
+    }
+    fumacas = fumacas.filter(f => f.vida > 0);
+}
+
+function desenharFumacas() {
+    if (!fumacas.length) return;
+    ctx.save();
+    for (const f of fumacas) {
+        const alpha = Math.max(0, f.vida) * 0.5;
+        const tom = 150 + Math.floor((1 - f.vida) * 60);   // clareia ao sumir
+        ctx.fillStyle = `rgba(${tom},${tom},${tom},${alpha})`;
+        ctx.beginPath();
+        ctx.arc(f.x, f.y, f.tam, 0, Math.PI * 2);
+        ctx.fill();
+    }
+    ctx.restore();
 }
 
 // Amigo online: ou está na lista de amigosOnline (servidor) ou na minha sala
@@ -1049,6 +1100,10 @@ function conectar(opts = {}) {
                 dados.targetX = dados.x;   // inicializa alvo p/ interpolação
                 dados.targetY = dados.y;
                 outrosJogadores[dados.id] = dados;
+                // Se chegou por teleporte, solta fumaça na posição dele
+                if (dados.tp) {
+                    spawnFumaca(dados.x + meuBicho.tamanho / 2, dados.y + meuBicho.tamanho / 2);
+                }
             }
             // Evento de sistema — só no debug mode (não polui o chat)
             registrarDebug("join", `» ${dados.username} entrou.`);
