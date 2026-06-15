@@ -513,12 +513,12 @@ def _enviar_email_reset_thread(email: str, username: str, token: str):
     except Exception as e:
         print(f"[reset] falha ao enviar email: {e}")
 
-        def enviar_email_reset(email: str, username: str, token: str) -> bool:
-            """Dispara o envio em background (fire-and-forget). Retorna imediatamente."""
-            link = f"https://sala33.app.br/?reset={token}"
-            if not SMTP_ATIVO:
-                print(f"[reset] (email desativado) {username} <{email or 'sem email'}> → {link}")
-                return False
+def enviar_email_reset(email: str, username: str, token: str) -> bool:
+    """Dispara o envio em background (fire-and-forget). Retorna imediatamente."""
+    link = f"https://sala33.app.br/?reset={token}"
+    if not SMTP_ATIVO:
+            print(f"[reset] (email desativado) {username} <{email or 'sem email'}> → {link}")
+            return False
             if not email:
                 print(f"[reset] usuário {username} não tem email cadastrado")
                 return False
