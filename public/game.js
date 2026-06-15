@@ -281,18 +281,21 @@ async function inicializar() {
         Wasm.init(); // async, sem bloquear — fallback JS ativo enquanto carrega
 
         btn.disabled = false;
-        btn.textContent = "ENTRAR";
-
-        // Se a URL tem ?reset=TOKEN, abre direto a tela de nova senha
-        const params = new URLSearchParams(location.search);
-        const resetTok = params.get("reset");
-        if (resetTok) {
-            _resetToken = resetTok;
-            trocarAba("reset_aplicar");
+        // Se estamos no modo reset, mantém o texto correto após loading
+        if (modoAuth === "reset_aplicar") {
+            btn.textContent = "REDEFINIR SENHA";
+        } else {
+            btn.textContent = "ENTRAR";
         }
     } catch (e) {
         console.error("Erro ao carregar configs:", e);
-        btn.textContent = "ERRO — VEJA O CONSOLE";
+        // No modo reset, permite continuar mesmo com erro de loading (sprites são opcionais)
+        if (modoAuth === "reset_aplicar") {
+            btn.disabled = false;
+            btn.textContent = "REDEFINIR SENHA";
+        } else {
+            btn.textContent = "ERRO — VEJA O CONSOLE";
+        }
     }
 }
 
@@ -1922,4 +1925,13 @@ function loop(timestamp) {
 // =====================================================
 //   BOOT
 // =====================================================
-window.addEventListener("DOMContentLoaded", inicializar);
+window.addEventListener("DOMContentLoaded", () => {
+    // Detecta ?reset=TOKEN ANTES da inicialização async.
+    // Se inicializar() falhar por qualquer motivo, a tela de reset ainda aparece.
+    const resetTok = new URLSearchParams(location.search).get("reset");
+    if (resetTok) {
+        _resetToken = resetTok;
+        trocarAba("reset_aplicar");
+    }
+    inicializar();
+});
