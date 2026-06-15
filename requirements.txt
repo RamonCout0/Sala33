@@ -1,1 +1,6 @@
+# Único requisito obrigatório
 websockets>=14.0
+
+# Opcional: só necessário se quiser banco de dados (contas/perfis/amigos).
+# Sem ele o jogo roda normal em modo convidado.
+asyncpg>=0.29

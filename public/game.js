@@ -19,6 +19,7 @@ const ctx = canvas.getContext("2d");
 let ws;
 
 let minhaSala = "";
+let meuSid = null;  // session id enviado pelo servidor
 let meuBicho = {
     username: "", x: 200, y: 150, velocidade: 2, tamanho: 32,
     chatTexto: "", chatTimer: 0, isTyping: false,
@@ -35,9 +36,107 @@ let legendaTimer = 0;
 let tempoAnterior = 0;
 const intervaloFps = 1000 / 60;
 
+// Throttle de envio de movimento: manda no máximo ~15x/s (a cada ~66ms)
+// em vez de 60x/s. Evita floodar o rate limiter do servidor (causa dos "TPs").
+let ultimoEnvioMov = 0;
+const INTERVALO_MOV_MS = 66;
+let movPendente = false;   // há posição nova não enviada?
+
 let mostrarDebug = false;
 let tremorTela = 0;
 let mouseX = 0, mouseY = 0;
+
+// Debug log (eventos de sistema — só visíveis via F2)
+const debugLog = [];
+const DEBUG_LOG_MAX = 60;
+
+function registrarDebug(categoria, mensagem, meta) {
+    debugLog.push({ categoria, mensagem, meta: meta || {}, ts: horaAtualBrasil() });
+    if (debugLog.length > DEBUG_LOG_MAX) debugLog.shift();
+}
+
+// =====================================================
+//   WASM — Physics Engine
+//   Carrega public/wasm/physics.wasm e expõe:
+//     Wasm.update_particles(ptr, count, dt)
+//     Wasm.lerp_positions(src, dst, out, n, t)
+//     Wasm.check_rect_overlap(...)
+//     Wasm.snow_update(ptr, count, speed_mult, w, h)
+// =====================================================
+const Wasm = {
+    ready: false,
+    _inst: null,
+    _mem: null,
+    // Buffers alocados dentro da memória do módulo
+    _ptrs: {},
+
+    async init() {
+        try {
+            const res = await fetch('wasm/physics.wasm');
+            const buf = await res.arrayBuffer();
+            const { instance } = await WebAssembly.instantiate(buf, {
+                env: { memory: new WebAssembly.Memory({ initial: 4 }) }
+            });
+            this._inst = instance.exports;
+            this._mem  = instance.exports.memory;
+            this.ready = true;
+            console.log('[WASM] physics.wasm carregado ✓');
+        } catch (e) {
+            console.warn('[WASM] Não foi possível carregar physics.wasm, usando fallback JS:', e.message);
+        }
+    },
+
+    _alloc(floats) {
+        // Retorna um ponteiro pra um bloco de floats na memória do WASM
+        // Simplificado: usa o heap base do módulo
+        return 0; // será expandido quando necessário
+    },
+
+    // Chama update_particles no WASM ou faz fallback JS
+    updateParticles(arr, dt) {
+        if (!this.ready || arr.length === 0) return arr;
+        // Cria Float32Array view na memória do WASM
+        const count = arr.length;
+        const mem   = new Float32Array(this._mem.buffer, 0, count * 8);
+        for (let i = 0; i < count; i++) {
+            const p = arr[i], base = i * 8;
+            mem[base]   = p.x;    mem[base+1] = p.y;
+            mem[base+2] = p.vx;   mem[base+3] = p.vy;
+            mem[base+4] = p.vida; mem[base+5] = p.decay;
+            mem[base+6] = p.tam;
+            // flags: bit0=ativo, bit1=tem_gravidade, bit2=tem_drift
+            let flags = 1; // sempre ativo
+            if (p.gravidade) flags |= 2;
+            if (p.drift)     flags |= 4;
+            mem[base+7] = flags;
+        }
+        this._inst.update_particles(0, count, dt);
+        // Lê de volta
+        for (let i = 0; i < count; i++) {
+            const p = arr[i], base = i * 8;
+            p.x    = mem[base];   p.y    = mem[base+1];
+            p.vx   = mem[base+2]; p.vy   = mem[base+3];
+            p.vida = mem[base+4]; p.tam  = mem[base+6];
+        }
+        return arr.filter(p => p.vida > 0);
+    },
+
+    // Colisão rect-rect (WASM ou fallback)
+    checkRectOverlap(ax, ay, aw, ah, bx, by, bw, bh) {
+        if (this.ready) {
+            return this._inst.check_rect_overlap(ax,ay,aw,ah,bx,by,bw,bh) === 1;
+        }
+        return ax < bx+bw && ax+aw > bx && ay < by+bh && ay+ah > by;
+    },
+
+    // Ponto em rect (WASM ou fallback)
+    checkPointInRect(px, py, rx, ry, rw, rh) {
+        if (this.ready) {
+            return this._inst.check_point_in_rect(px,py,rx,ry,rw,rh) === 1;
+        }
+        return px >= rx && px <= rx+rw && py >= ry && py <= ry+rh;
+    },
+};
 
 // =====================================================
 //   CONFIG DINÂMICA (carregada de JSON)
@@ -175,10 +274,11 @@ async function inicializar() {
             })));
         }
 
-        // 5. Imagens
+        // 5. Imagens + WASM
         minhaSala = SALA_INICIAL;
         carregarImagens();
         inicializarPainelEmojis();
+        Wasm.init(); // async, sem bloquear — fallback JS ativo enquanto carrega
 
         btn.disabled = false;
         btn.textContent = "ENTRAR";
@@ -341,40 +441,700 @@ function enviarEmote(emote) {
 window.enviarEmote = enviarEmote;
 
 // =====================================================
+//   AUTENTICAÇÃO / CONTAS
+//   Abas no menu: convidado | entrar | criar conta.
+//   Auth acontece via WebSocket (registrar / autenticar).
+// =====================================================
+let modoAuth = "convidado";          // convidado | entrar | criar | esqueci
+let tokenConta = null;               // JWT salvo após login/registro
+let wsAuth = null;                   // socket temporário só pra auth
+
+function _authMsg(texto, tipo) {
+    const el = document.getElementById("authMsg");
+    if (!el) return;
+    el.textContent = texto;
+    el.className = tipo || "";
+    if (!texto) el.className = "";
+}
+
+function trocarAba(modo) {
+    modoAuth = modo;
+    _authMsg("", "");
+    document.querySelectorAll(".auth-tab").forEach(t => {
+        t.classList.toggle("ativa", t.dataset.modo === modo);
+    });
+    const contaFields = document.getElementById("contaFields");
+    const guestField  = document.getElementById("username");
+    const seletorSkin = document.querySelector(".selector-container");
+    const emailField  = document.getElementById("contaEmail");
+    const linkEsqueci = document.getElementById("linkEsqueciSenha");
+    const resetFields = document.getElementById("resetFields");
+    const btn         = document.getElementById("btnEntrar");
+
+    contaFields.style.display = "none";
+    guestField.style.display  = "none";
+    if (seletorSkin) seletorSkin.style.display = "none";
+    if (emailField)  emailField.style.display  = "none";
+    if (linkEsqueci) linkEsqueci.style.display = "none";
+    if (resetFields) resetFields.style.display = "none";
+
+    if (modo === "convidado") {
+        guestField.style.display = "block";
+        if (seletorSkin) seletorSkin.style.display = "flex";
+        btn.textContent = "ENTRAR";
+    } else if (modo === "entrar") {
+        contaFields.style.display = "block";
+        if (linkEsqueci) linkEsqueci.style.display = "block";
+        btn.textContent = "ENTRAR COM CONTA";
+    } else if (modo === "criar") {
+        contaFields.style.display = "block";
+        if (emailField) emailField.style.display = "block";
+        if (seletorSkin) seletorSkin.style.display = "flex";
+        btn.textContent = "CRIAR E ENTRAR";
+    } else if (modo === "esqueci") {
+        if (resetFields) resetFields.style.display = "block";
+        btn.textContent = "ENVIAR RECUPERAÇÃO";
+    }
+}
+window.trocarAba = trocarAba;
+
+// URL do WebSocket (mesma lógica usada no jogo)
+function _wsUrl() {
+    const proto = location.protocol === "https:" ? "wss:" : "ws:";
+    const isLocal = location.hostname === "localhost" || location.hostname === "127.0.0.1"
+        || location.hostname.startsWith("192.168.") || location.hostname.startsWith("10.");
+    return isLocal ? `ws://${location.hostname}:8080` : `${proto}//${location.host}`;
+}
+
+// Roteador do botão ENTRAR conforme a aba ativa
+function acaoMenu() {
+    if (modoAuth === "convidado") {
+        conectar();
+    } else if (modoAuth === "entrar" || modoAuth === "criar") {
+        autenticarOuCriar(modoAuth === "criar" ? "registrar" : "autenticar");
+    } else if (modoAuth === "esqueci") {
+        solicitarReset();
+    }
+}
+window.acaoMenu = acaoMenu;
+
+// Abre um socket dedicado de auth e manda uma mensagem, tratando a resposta.
+// cb(dados) decide o que fazer com cada resposta.
+function _authSocket(payload, onResp) {
+    const sock = new WebSocket(_wsUrl());
+    sock.onopen = () => sock.send(JSON.stringify(payload));
+    sock.onmessage = (event) => {
+        let dados;
+        try { dados = JSON.parse(event.data); } catch { return; }
+        onResp(dados, sock);
+    };
+    sock.onerror = () => onResp({ tipo: "_erro_conexao" }, sock);
+    return sock;
+}
+
+// Solicita recuperação de senha (resposta sempre neutra)
+function solicitarReset() {
+    const username = document.getElementById("resetUser").value.trim().toUpperCase();
+    if (username.length < 3) return _authMsg("Digite seu usuário.", "erro");
+    const btn = document.getElementById("btnEntrar");
+    btn.disabled = true; btn.textContent = "ENVIANDO...";
+    _authSocket({ tipo: "solicitar_reset", username }, (dados, sock) => {
+        if (dados.tipo === "reset_solicitado") {
+            _authMsg(dados.mensagem || "Se a conta existir, enviamos instruções.", "ok");
+            sock.close();
+            btn.disabled = false; btn.textContent = "ENVIAR RECUPERAÇÃO";
+        } else if (dados.tipo === "_erro_conexao") {
+            _authMsg("Erro de conexão.", "erro");
+            btn.disabled = false; btn.textContent = "ENVIAR RECUPERAÇÃO";
+        }
+    });
+}
+window.solicitarReset = solicitarReset;
+
+// Faz registro OU login via WebSocket dedicado, salva token e entra no jogo
+function autenticarOuCriar(tipo) {
+    const username = document.getElementById("contaUser").value.trim().toUpperCase();
+    const password = document.getElementById("contaPass").value;
+    const email = (document.getElementById("contaEmail")?.value || "").trim();
+    if (username.length < 3) return _authMsg("Usuário precisa de 3+ caracteres.", "erro");
+    if (password.length < 6) return _authMsg("Senha precisa de 6+ caracteres.", "erro");
+    if (!Object.keys(MAPAS).length) return _authMsg("Configs carregando, aguarde...", "erro");
+
+    const btn = document.getElementById("btnEntrar");
+    btn.disabled = true;
+    btn.textContent = tipo === "registrar" ? "CRIANDO..." : "ENTRANDO...";
+    _authMsg("", "");
+
+    // Payload: inclui email só no registro (e só se preenchido)
+    const payload = { tipo, username, password };
+    if (tipo === "registrar" && email) payload.email = email;
+
+    // Abre um socket dedicado só pra auth
+    wsAuth = new WebSocket(_wsUrl());
+
+    wsAuth.onopen = () => {
+        wsAuth.send(JSON.stringify(payload));
+    };
+
+    wsAuth.onmessage = (event) => {
+        let dados;
+        try { dados = JSON.parse(event.data); } catch { return; }
+
+        if (dados.tipo === "auth_ok") {
+            tokenConta = dados.token;
+            localStorage.setItem("sala33_token", tokenConta);
+            meuBicho.username = dados.user.username;
+            meuBicho.spriteId = dados.user.sprite_id || "cinzaguy";
+            meuUserId = dados.user.id;
+            meuBio = dados.user.bio || "";
+            wsAuth.close(); wsAuth = null;
+            btn.disabled = false;
+            // Entra no jogo usando o token
+            conectar({ token: tokenConta });
+        }
+        else if (dados.tipo === "auth_erro") {
+            _authMsg(dados.mensagem || "Falha na autenticação.", "erro");
+            wsAuth.close(); wsAuth = null;
+            btn.disabled = false;
+            btn.textContent = tipo === "registrar" ? "CRIAR E ENTRAR" : "ENTRAR COM CONTA";
+        }
+    };
+
+    wsAuth.onerror = () => {
+        _authMsg("Erro de conexão com o servidor.", "erro");
+        btn.disabled = false;
+        btn.textContent = tipo === "registrar" ? "CRIAR E ENTRAR" : "ENTRAR COM CONTA";
+    };
+}
+window.autenticarOuCriar = autenticarOuCriar;
+
+// =====================================================
+//   PAINEL SOCIAL (amigos + favoritos + pedidos + PV)
+// =====================================================
+let contaAtiva = false;            // logado com conta?
+let meuUserId = null;              // meu id de usuário (conta)
+let meuBio = "";                   // bio do perfil
+let meusAmigos = [];               // [{id, username, sprite_id}]
+let meusFavoritos = [];            // ["the_hub", ...]
+let meusPedidos = [];              // pedidos recebidos [{id, username, sprite_id}]
+let amigosOnline = new Set();      // ids de amigos online agora
+let likesSala = {};                // { room_id: {total, curtiu} }
+
+// Estado do chat privado
+let pvAtual = null;                // {id, username} do amigo com quem converso
+const pvHistorico = {};            // { friendId: [ {de, texto, ts, eu} ] }
+
+function toggleSocial() {
+    const painel = document.getElementById("socialPanel");
+    if (!painel) return;
+    painel.classList.toggle("aberto");
+    if (painel.classList.contains("aberto")) {
+        // Pede lista atualizada ao abrir (traz status online + pedidos)
+        if (ws?.readyState === WebSocket.OPEN && contaAtiva) {
+            ws.send(JSON.stringify({ tipo: "listar_amigos" }));
+        }
+        renderizarSocial();
+    }
+}
+window.toggleSocial = toggleSocial;
+
+function _socialMsg(texto, tipo) {
+    const el = document.getElementById("socialMsg");
+    if (!el) return;
+    el.textContent = texto;
+    el.className = tipo || "";
+    if (texto) setTimeout(() => { el.textContent = ""; el.className = ""; }, 4000);
+}
+
+function adicionarAmigo() {
+    const input = document.getElementById("inputAddAmigo");
+    const nome = input.value.trim().toUpperCase();
+    if (!nome) return;
+    if (nome === meuBicho.username) return _socialMsg("Você não pode se adicionar.", "erro");
+    if (ws?.readyState === WebSocket.OPEN) {
+        ws.send(JSON.stringify({ tipo: "add_amigo", username: nome }));
+        input.value = "";
+    }
+}
+window.adicionarAmigo = adicionarAmigo;
+
+function aceitarPedido(fromId) {
+    if (ws?.readyState === WebSocket.OPEN)
+        ws.send(JSON.stringify({ tipo: "aceitar_pedido", from_id: fromId }));
+}
+window.aceitarPedido = aceitarPedido;
+
+function recusarPedido(fromId) {
+    if (ws?.readyState === WebSocket.OPEN)
+        ws.send(JSON.stringify({ tipo: "recusar_pedido", from_id: fromId }));
+    // Remove localmente na hora
+    meusPedidos = meusPedidos.filter(p => p.id !== fromId);
+    renderizarSocial();
+}
+window.recusarPedido = recusarPedido;
+
+function removerAmigo(friendId) {
+    if (ws?.readyState === WebSocket.OPEN) {
+        ws.send(JSON.stringify({ tipo: "remover_amigo", friend_id: friendId }));
+    }
+}
+window.removerAmigo = removerAmigo;
+
+function tpAmigo(friendId) {
+    if (ws?.readyState === WebSocket.OPEN) {
+        ws.send(JSON.stringify({ tipo: "tp_amigo", friend_id: friendId }));
+    }
+}
+window.tpAmigo = tpAmigo;
+
+function toggleFavoritoSalaAtual() {
+    if (ws?.readyState === WebSocket.OPEN) {
+        ws.send(JSON.stringify({ tipo: "toggle_favorito", room_id: minhaSala }));
+    }
+}
+window.toggleFavoritoSalaAtual = toggleFavoritoSalaAtual;
+
+function toggleLikeSalaAtual() {
+    if (ws?.readyState === WebSocket.OPEN) {
+        ws.send(JSON.stringify({ tipo: "toggle_like", room_id: minhaSala }));
+    }
+}
+window.toggleLikeSalaAtual = toggleLikeSalaAtual;
+
+// =====================================================
+//   PAINEL DE PERFIL
+// =====================================================
+let _perfilAberto = false;
+
+function _perfilMsg(texto, tipo) {
+    const el = document.getElementById("perfilMsg");
+    if (!el) return;
+    el.textContent = texto;
+    el.className = tipo || "";
+    if (texto) setTimeout(() => { if (el.textContent === texto) { el.textContent = ""; el.className = ""; } }, 4000);
+}
+
+function _popularSpritesPerfil() {
+    const sel = document.getElementById("perfilSpriteSelect");
+    if (!sel || sel.options.length > 0) return;
+    // Reutiliza PATHS_SPRITES carregados na inicialização
+    for (const [id, path] of Object.entries(PATHS_SPRITES)) {
+        const opt = document.createElement("option");
+        opt.value = id;
+        // Tenta buscar o nome do select principal do menu
+        const mainOpt = document.querySelector(`#spriteSelect option[value="${id}"]`);
+        opt.textContent = mainOpt ? mainOpt.textContent : id.toUpperCase();
+        sel.appendChild(opt);
+    }
+    sel.value = meuBicho.spriteId || "cinzaguy";
+    sel.addEventListener("change", _atualizarPreviewPerfil);
+    _atualizarPreviewPerfil();
+}
+
+function _atualizarPreviewPerfil() {
+    const sel = document.getElementById("perfilSpriteSelect");
+    const img = document.getElementById("perfilSpritePreview");
+    const fb  = document.getElementById("perfilFallback");
+    if (!sel || !img) return;
+    const path = PATHS_SPRITES[sel.value];
+    if (path) {
+        img.src = path;
+        img.style.display = "block";
+        if (fb) fb.style.display = "none";
+    } else {
+        img.style.display = "none";
+        if (fb) fb.style.display = "block";
+    }
+}
+
+function togglePerfil() {
+    const overlay = document.getElementById("perfilOverlay");
+    const painel  = document.getElementById("perfilPanel");
+    if (!painel) return;
+    _perfilAberto = !_perfilAberto;
+    if (_perfilAberto) {
+        // Popula campos com dados atuais
+        const nomeEl = document.getElementById("perfilUsername");
+        if (nomeEl) nomeEl.textContent = meuBicho.username || "";
+        const bioEl = document.getElementById("perfilBio");
+        if (bioEl) bioEl.value = meuBio || "";
+        _popularSpritesPerfil();
+        // Sincroniza sprite selecionado com o atual
+        const sel = document.getElementById("perfilSpriteSelect");
+        if (sel) { sel.value = meuBicho.spriteId || "cinzaguy"; _atualizarPreviewPerfil(); }
+        // Limpa campos de senha
+        ["perfilSenhaAtual","perfilNovaSenha","perfilConfirmarSenha"].forEach(id => {
+            const el = document.getElementById(id);
+            if (el) el.value = "";
+        });
+        _perfilMsg("", "");
+        if (overlay) overlay.style.display = "block";
+        painel.style.display = "block";
+    } else {
+        if (overlay) overlay.style.display = "none";
+        painel.style.display = "none";
+    }
+}
+window.togglePerfil = togglePerfil;
+
+function fecharPerfilOverlay(e) {
+    if (e.target === document.getElementById("perfilOverlay")) togglePerfil();
+}
+window.fecharPerfilOverlay = fecharPerfilOverlay;
+
+function salvarPerfil() {
+    if (!ws || ws.readyState !== WebSocket.OPEN) return _perfilMsg("Sem conexão.", "erro");
+    const sprite = document.getElementById("perfilSpriteSelect")?.value;
+    const bio    = document.getElementById("perfilBio")?.value || "";
+    const btn    = document.getElementById("btnSalvarPerfil");
+    if (btn) { btn.disabled = true; btn.textContent = "SALVANDO..."; }
+    ws.send(JSON.stringify({ tipo: "atualizar_perfil", sprite_id: sprite, bio: bio.trim() }));
+}
+window.salvarPerfil = salvarPerfil;
+
+function trocarSenhaPerfil() {
+    if (!ws || ws.readyState !== WebSocket.OPEN) return _perfilMsg("Sem conexão.", "erro");
+    const senhaAtual   = document.getElementById("perfilSenhaAtual")?.value || "";
+    const novaSenha    = document.getElementById("perfilNovaSenha")?.value || "";
+    const confirmar    = document.getElementById("perfilConfirmarSenha")?.value || "";
+    if (!senhaAtual) return _perfilMsg("Digite a senha atual.", "erro");
+    if (novaSenha.length < 6) return _perfilMsg("Nova senha precisa de 6+ caracteres.", "erro");
+    if (novaSenha !== confirmar) return _perfilMsg("As senhas não coincidem.", "erro");
+    const btn = document.getElementById("btnTrocarSenha");
+    if (btn) { btn.disabled = true; btn.textContent = "ALTERANDO..."; }
+    ws.send(JSON.stringify({ tipo: "trocar_senha", senha_atual: senhaAtual, nova_senha: novaSenha }));
+}
+window.trocarSenhaPerfil = trocarSenhaPerfil;
+
+// Pede ao servidor o estado de likes da sala atual (total + se eu curti)
+function pedirEstadoSala() {
+    if (ws?.readyState === WebSocket.OPEN && minhaSala) {
+        ws.send(JSON.stringify({ tipo: "estado_sala", room_id: minhaSala }));
+    }
+}
+
+// Dispara a animação visual de teleporte (flash cinza + label "TELEPORTADO")
+function animarTeleporte() {
+    const flash = document.getElementById("tpFlash");
+    const label = document.getElementById("tpLabel");
+    if (flash) {
+        flash.classList.remove("ativo");
+        void flash.offsetWidth;        // força reflow pra reiniciar a animação
+        flash.classList.add("ativo");
+    }
+    if (label) {
+        label.classList.remove("ativo");
+        void label.offsetWidth;
+        label.classList.add("ativo");
+    }
+}
+
+// ---------- PARTÍCULAS DE FUMAÇA (efeito de chegada por TP) ----------
+// Renderizadas no canvas. Cada nuvem é uma lista de partículas cinza
+// que sobem, expandem e somem — estilo "puff" de teleporte.
+let fumacas = [];   // [{x, y, vx, vy, vida, vidaMax, tam}]
+
+function spawnFumaca(cx, cy) {
+    // cx, cy = centro do jogador que chegou
+    const N = 14;
+    for (let i = 0; i < N; i++) {
+        const ang = (Math.PI * 2 * i) / N + Math.random() * 0.5;
+        const vel = 0.3 + Math.random() * 0.8;
+        fumacas.push({
+            x: cx + (Math.random() - 0.5) * 10,
+            y: cy + (Math.random() - 0.5) * 10,
+            vx: Math.cos(ang) * vel,
+            vy: Math.sin(ang) * vel - 0.4,   // tendência a subir
+            vida: 1.0,
+            vidaMax: 1.0,
+            decay: 0.012 + Math.random() * 0.012,
+            tam: 5 + Math.random() * 7,
+        });
+    }
+    if (fumacas.length > 200) fumacas = fumacas.slice(-200);   // teto de segurança
+}
+
+function atualizarFumacas() {
+    for (const f of fumacas) {
+        f.x += f.vx;
+        f.y += f.vy;
+        f.vy += 0.005;           // leve gravidade que desacelera a subida
+        f.vx *= 0.96;            // arrasto
+        f.tam += 0.35;           // expande
+        f.vida -= f.decay;
+    }
+    fumacas = fumacas.filter(f => f.vida > 0);
+}
+
+function desenharFumacas() {
+    if (!fumacas.length) return;
+    ctx.save();
+    for (const f of fumacas) {
+        const alpha = Math.max(0, f.vida) * 0.5;
+        const tom = 150 + Math.floor((1 - f.vida) * 60);   // clareia ao sumir
+        ctx.fillStyle = `rgba(${tom},${tom},${tom},${alpha})`;
+        ctx.beginPath();
+        ctx.arc(f.x, f.y, f.tam, 0, Math.PI * 2);
+        ctx.fill();
+    }
+    ctx.restore();
+}
+
+// Amigo online: ou está na lista de amigosOnline (servidor) ou na minha sala
+function _amigoEstaOnline(amigo) {
+    if (amigosOnline.has(amigo.id)) return true;
+    for (const id in outrosJogadores) {
+        if (outrosJogadores[id].username === amigo.username) return true;
+    }
+    return false;
+}
+
+// ---------- CHAT PRIVADO (PV) ----------
+function abrirPV(friendId, friendName) {
+    pvAtual = { id: friendId, username: friendName };
+    if (!pvHistorico[friendId]) pvHistorico[friendId] = [];
+    const painel = document.getElementById("pvPanel");
+    const titulo = document.getElementById("pvTitulo");
+    if (titulo) titulo.textContent = `// PV: ${friendName}`;
+    if (painel) painel.classList.add("aberto");
+    renderizarPV();
+    setTimeout(() => document.getElementById("pvInput")?.focus(), 80);
+}
+window.abrirPV = abrirPV;
+
+function fecharPV() {
+    document.getElementById("pvPanel")?.classList.remove("aberto");
+    pvAtual = null;
+}
+window.fecharPV = fecharPV;
+
+function enviarPV() {
+    const input = document.getElementById("pvInput");
+    if (!input || !pvAtual) return;
+    const texto = input.value.trim();
+    if (!texto) return;
+    if (ws?.readyState === WebSocket.OPEN) {
+        ws.send(JSON.stringify({ tipo: "pv", friend_id: pvAtual.id, texto: traduzirEmotes(texto) }));
+        input.value = "";
+    }
+}
+window.enviarPV = enviarPV;
+
+function _registrarPV(friendId, de, texto, eu) {
+    if (!pvHistorico[friendId]) pvHistorico[friendId] = [];
+    pvHistorico[friendId].push({ de, texto, ts: horaAtualBrasil(), eu });
+    if (pvHistorico[friendId].length > 100) pvHistorico[friendId].shift();
+    // Se o PV está aberto com esse amigo, re-renderiza
+    if (pvAtual && pvAtual.id === friendId) renderizarPV();
+}
+
+function renderizarPV() {
+    const box = document.getElementById("pvBox");
+    if (!box || !pvAtual) return;
+    const hist = pvHistorico[pvAtual.id] || [];
+    box.innerHTML = "";
+    if (hist.length === 0) {
+        const vazio = document.createElement("div");
+        vazio.className = "pv-sistema";
+        vazio.textContent = `Início da conversa com ${pvAtual.username}.`;
+        box.appendChild(vazio);
+    } else {
+        hist.forEach(m => {
+            const div = document.createElement("div");
+            div.className = "pv-msg" + (m.eu ? " eu" : "");
+            const hora = document.createElement("span");
+            hora.className = "pv-hora";
+            hora.textContent = m.ts;
+            const de = document.createElement("span");
+            de.className = "pv-de";
+            de.textContent = (m.eu ? "você" : m.de) + ": ";
+            div.appendChild(hora);
+            div.appendChild(de);
+            div.appendChild(document.createTextNode(m.texto));
+            if (window.twemoji) {
+                twemoji.parse(div, { base: "https://cdn.jsdelivr.net/gh/twitter/twemoji@14.0.2/assets/", folder: "72x72", ext: ".png" });
+                _aplicarGrayscaleEmojis(div);
+            }
+            box.appendChild(div);
+        });
+    }
+    box.scrollTop = box.scrollHeight;
+}
+
+function renderizarSocial() {
+    // Botão de favoritar reflete o estado da sala atual
+    const btnFav = document.getElementById("btnFavSala");
+    if (btnFav) {
+        const favoritada = meusFavoritos.includes(minhaSala);
+        btnFav.classList.toggle("ativo", favoritada);
+        btnFav.textContent = favoritada
+            ? `★ SALA FAVORITADA (${minhaSala})`
+            : `☆ FAVORITAR ESTA SALA`;
+    }
+
+    // Botão de like reflete total + se eu curti
+    const btnLike = document.getElementById("btnLikeSala");
+    const likeCount = document.getElementById("likeCount");
+    if (btnLike) {
+        const info = likesSala[minhaSala] || { total: 0, curtiu: false };
+        if (likeCount) likeCount.textContent = info.total;
+        btnLike.classList.toggle("ativo", !!info.curtiu);
+        // ♥ cheio se curti, ♡ vazio se não
+        btnLike.innerHTML = (info.curtiu ? "♥" : "♡") + ` <span id="likeCount">${info.total}</span> LIKES`;
+    }
+
+    // Pedidos de amizade recebidos
+    const secaoPedidos = document.getElementById("secaoPedidos");
+    const listaPedidos = document.getElementById("listaPedidos");
+    const pedidosCount = document.getElementById("pedidosCount");
+    if (pedidosCount) pedidosCount.textContent = meusPedidos.length;
+    if (secaoPedidos) secaoPedidos.style.display = meusPedidos.length > 0 ? "block" : "none";
+    if (listaPedidos) {
+        listaPedidos.innerHTML = "";
+        meusPedidos.forEach(p => {
+            const item = document.createElement("div");
+            item.className = "pedido-item";
+            const nome = document.createElement("span");
+            nome.textContent = p.username;
+            const acoes = document.createElement("div");
+            acoes.className = "pedido-acoes";
+            const aceitar = document.createElement("button");
+            aceitar.className = "pedido-btn pedido-aceitar";
+            aceitar.textContent = "✓";
+            aceitar.title = "Aceitar";
+            aceitar.onclick = () => aceitarPedido(p.id);
+            const recusar = document.createElement("button");
+            recusar.className = "pedido-btn pedido-recusar";
+            recusar.textContent = "×";
+            recusar.title = "Recusar";
+            recusar.onclick = () => recusarPedido(p.id);
+            acoes.appendChild(aceitar);
+            acoes.appendChild(recusar);
+            item.appendChild(nome);
+            item.appendChild(acoes);
+            listaPedidos.appendChild(item);
+        });
+    }
+
+    // Lista de amigos
+    const lista = document.getElementById("listaAmigos");
+    const count = document.getElementById("amigosCount");
+    if (count) count.textContent = meusAmigos.length;
+    if (lista) {
+        if (meusAmigos.length === 0) {
+            lista.innerHTML = `<div class="social-vazio">Nenhum amigo ainda.</div>`;
+        } else {
+            lista.innerHTML = "";
+            meusAmigos.forEach(a => {
+                const online = _amigoEstaOnline(a);
+                const item = document.createElement("div");
+                item.className = "amigo-item";
+
+                const nome = document.createElement("div");
+                nome.className = "nome";
+                const dot = document.createElement("span");
+                dot.className = online ? "amigo-online" : "amigo-offline";
+                nome.appendChild(dot);
+                nome.appendChild(document.createTextNode(a.username));
+
+                const acoes = document.createElement("div");
+                acoes.className = "amigo-acoes";
+
+                // Botão TP (só ativo se online)
+                const btnTp = document.createElement("button");
+                btnTp.className = "amigo-btn-tp";
+                btnTp.textContent = "TP";
+                btnTp.title = online ? `Teleportar até ${a.username}` : "Amigo offline";
+                btnTp.disabled = !online;
+                btnTp.onclick = () => tpAmigo(a.id);
+
+                // Botão PV
+                const btnPv = document.createElement("button");
+                btnPv.className = "amigo-btn-pv";
+                btnPv.textContent = "PV";
+                btnPv.title = `Conversar com ${a.username}`;
+                btnPv.onclick = () => abrirPV(a.id, a.username);
+
+                // Botão remover
+                const btnRm = document.createElement("button");
+                btnRm.className = "social-btn-acao remove";
+                btnRm.textContent = "×";
+                btnRm.title = "Remover amigo";
+                btnRm.onclick = () => removerAmigo(a.id);
+
+                acoes.appendChild(btnTp);
+                acoes.appendChild(btnPv);
+                acoes.appendChild(btnRm);
+                item.appendChild(nome);
+                item.appendChild(acoes);
+                lista.appendChild(item);
+            });
+        }
+    }
+
+    // Lista de favoritos
+    const favBox = document.getElementById("listaFavoritos");
+    if (favBox) {
+        if (meusFavoritos.length === 0) {
+            favBox.innerHTML = `<div class="social-vazio">Nenhuma sala favoritada.</div>`;
+        } else {
+            favBox.innerHTML = "";
+            meusFavoritos.forEach(room => {
+                const nomeSala = MAPAS[room]?.nome || room;
+                const item = document.createElement("div");
+                item.className = "fav-item";
+                const nome = document.createElement("div");
+                nome.className = "nome";
+                nome.textContent = `★ ${nomeSala}`;
+                const btn = document.createElement("button");
+                btn.className = "social-btn-acao remove";
+                btn.textContent = "×";
+                btn.title = "Desfavoritar";
+                btn.onclick = () => {
+                    if (ws?.readyState === WebSocket.OPEN)
+                        ws.send(JSON.stringify({ tipo: "toggle_favorito", room_id: room }));
+                };
+                item.appendChild(nome);
+                item.appendChild(btn);
+                favBox.appendChild(item);
+            });
+        }
+    }
+}
+
+// =====================================================
 //   CONEXÃO WEBSOCKET
 // =====================================================
-function conectar() {
-    const user = document.getElementById("username").value;
-    const skin = document.getElementById("spriteSelect").value;
-    if (!user) return alert("Digite um nome!");
-    if (!Object.keys(MAPAS).length) return alert("Configs ainda não carregaram. Recarregue a página.");
+function conectar(opts = {}) {
+    const token = opts.token || null;
 
-    meuBicho.username = user.toUpperCase().trim();
-    meuBicho.spriteId = skin;
-    localStorage.setItem("sala33_username", meuBicho.username);
-    localStorage.setItem("sala33_spriteId", skin);
+    if (token) {
+        // Login por conta: username/sprite já vieram do auth_ok
+        if (!meuBicho.username) return _authMsg("Erro: sessão sem usuário.", "erro");
+    } else {
+        // Login convidado: lê os campos do menu
+        const user = document.getElementById("username").value;
+        const skin = document.getElementById("spriteSelect").value;
+        if (!user) return alert("Digite um nome!");
+        if (!Object.keys(MAPAS).length) return alert("Configs ainda não carregaram. Recarregue a página.");
+        meuBicho.username = user.toUpperCase().trim();
+        meuBicho.spriteId = skin;
+        localStorage.setItem("sala33_username", meuBicho.username);
+        localStorage.setItem("sala33_spriteId", skin);
+    }
 
     document.getElementById("menu").style.display = "none";
     document.getElementById("gameUI").style.display = "flex";
 
     tocarMusica(SALA_INICIAL);
 
-    const proto = location.protocol === "https:" ? "wss:" : "ws:";
-    // Produção: mesmo host, path /ws (proxy reverso)
-    // Local: porta 8080 direto
-    const isLocal = location.hostname === "localhost" || location.hostname === "127.0.0.1" || location.hostname.startsWith("192.168.") || location.hostname.startsWith("10.");
-    const wsUrl = isLocal
-        ? "ws://" + location.hostname + ":8080"
-        : proto + "//" + location.host + "/ws";
-    ws = new WebSocket(wsUrl);
+    ws = new WebSocket(_wsUrl());
 
     ws.onopen = () => {
-        ws.send(JSON.stringify({
-            tipo: "login",
-            username: meuBicho.username,
-            spriteId: meuBicho.spriteId,
-            lado: meuBicho.lado,
-        }));
+        const payloadLogin = token
+            ? { tipo: "login", token, spriteId: meuBicho.spriteId, lado: meuBicho.lado }
+            : { tipo: "login", username: meuBicho.username, spriteId: meuBicho.spriteId, lado: meuBicho.lado };
+        ws.send(JSON.stringify(payloadLogin));
         legendaTimer = 180;
         precarregarAudios();
         setupMobileControls();
@@ -394,38 +1154,187 @@ function conectar() {
         }
 
         if (dados.tipo === "novo_jogador") {
-            if (dados.username !== meuBicho.username) {
+            if (dados.id !== meuSid) {
                 dados.chatTexto = ""; dados.chatTimer = 0; dados.isTyping = false;
                 dados.lado = dados.lado || "direita";
                 dados.animTick = 0; dados.movimentoTimer = 0;
+                dados.targetX = dados.x;   // inicializa alvo p/ interpolação
+                dados.targetY = dados.y;
                 outrosJogadores[dados.id] = dados;
+                // Se chegou por teleporte, solta fumaça na posição dele
+                if (dados.tp) {
+                    spawnFumaca(dados.x + meuBicho.tamanho / 2, dados.y + meuBicho.tamanho / 2);
+                }
             }
-            appendChatMsg("sistema", [{text: `» ${dados.username} entrou.`}]);
+            // Evento de sistema — só no debug mode (não polui o chat)
+            registrarDebug("join", `» ${dados.username} entrou.`);
         }
         else if (dados.tipo === "lista_jogadores") {
+            // O servidor envia nosso próprio sid na primeira lista
+            if (dados.meu_sid) meuSid = dados.meu_sid;
+            // Conta logada? ativa o painel social e popula amigos/favoritos/pedidos
+            if (dados.conta) {
+                contaAtiva = true;
+                meusAmigos = dados.amigos || [];
+                meusFavoritos = dados.favoritos || [];
+                meusPedidos = dados.pedidos || [];
+                amigosOnline = new Set(dados.online || []);
+                const btnSocial = document.getElementById("btnSocialToggle");
+                if (btnSocial) btnSocial.style.display = "block";
+                const btnPerfil = document.getElementById("btnPerfilToggle");
+                if (btnPerfil) btnPerfil.style.display = "block";
+                // Avisa se houver pedidos pendentes
+                if (meusPedidos.length > 0) {
+                    registrarDebug("info", `» ${meusPedidos.length} pedido(s) de amizade.`);
+                }
+                registrarDebug("info", `» Logado como conta (${meuBicho.username}).`);
+                renderizarSocial();
+                pedirEstadoSala();   // pega likes da sala inicial
+            }
             dados.jogadores.forEach(p => {
-                if (p.username !== meuBicho.username) {
+                if (p.id !== meuSid) {
                     p.chatTexto = ""; p.chatTimer = 0; p.isTyping = false;
                     p.lado = p.lado || "direita";
                     p.animTick = 0; p.movimentoTimer = 0;
+                    p.targetX = p.x;
+                    p.targetY = p.y;
                     outrosJogadores[p.id] = p;
                 }
             });
+        }
+        else if (dados.tipo === "amigos") {
+            meusAmigos = dados.lista || [];
+            if (dados.online) amigosOnline = new Set(dados.online);
+            if (dados.pedidos) meusPedidos = dados.pedidos;
+            renderizarSocial();
+        }
+        else if (dados.tipo === "pedido_recebido") {
+            // Alguém me mandou pedido enquanto estou online
+            const de = dados.de;
+            if (de && !meusPedidos.some(p => p.id === de.id)) {
+                meusPedidos.push(de);
+            }
+            appendChatMsg("sistema", [{text: `» ${de.username} quer ser seu amigo! Abra o painel ★ AMIGOS.`}]);
+            registrarDebug("info", `» Pedido de amizade de ${de.username}.`);
+            renderizarSocial();
+        }
+        else if (dados.tipo === "pedido_enviado") {
+            _socialMsg(dados.mensagem || "Pedido enviado.", "ok");
+        }
+        else if (dados.tipo === "pedido_recusado") {
+            meusPedidos = meusPedidos.filter(p => p.id !== dados.from_id);
+            renderizarSocial();
+        }
+        else if (dados.tipo === "amigo_erro") {
+            _socialMsg(dados.mensagem || "Não foi possível.", "erro");
+        }
+        else if (dados.tipo === "favorito_estado") {
+            if (dados.favoritado === true) {
+                if (!meusFavoritos.includes(dados.room_id)) meusFavoritos.push(dados.room_id);
+                _socialMsg(`Sala favoritada!`, "ok");
+            } else if (dados.favoritado === false) {
+                meusFavoritos = meusFavoritos.filter(r => r !== dados.room_id);
+                _socialMsg(`Sala removida dos favoritos.`, "ok");
+            }
+            renderizarSocial();
+        }
+        else if (dados.tipo === "like_estado") {
+            likesSala[dados.room_id] = {
+                total: dados.total || 0,
+                curtiu: dados.curtiu === true,
+            };
+            renderizarSocial();
+        }
+        else if (dados.tipo === "tp_ok") {
+            // Teleporte até o amigo: troca de sala client-side
+            minhaSala = dados.sala;
+            meuBicho.x = dados.x;
+            meuBicho.y = dados.y;
+            if (dados.meu_sid) meuSid = dados.meu_sid;
+            outrosJogadores = {};
+            (dados.jogadores || []).forEach(p => {
+                if (p.id !== meuSid) {
+                    p.chatTexto = ""; p.chatTimer = 0; p.isTyping = false;
+                    p.lado = p.lado || "direita";
+                    p.animTick = 0; p.movimentoTimer = 0;
+                    p.targetX = p.x; p.targetY = p.y;
+                    outrosJogadores[p.id] = p;
+                }
+            });
+            legendaTimer = 180;
+            tocarMusica(minhaSala);
+            getLogica()?.onEnter?.(MAPAS[minhaSala]);
+            animarTeleporte();      // flash + label "TELEPORTADO"
+            pedirEstadoSala();      // atualiza likes da nova sala
+            renderizarSocial();     // atualiza botões de fav/like pra nova sala
+            _socialMsg("Teleportado!", "ok");
+        }
+        else if (dados.tipo === "tp_erro") {
+            _socialMsg(dados.mensagem || "Não foi possível teleportar.", "erro");
+        }
+        else if (dados.tipo === "pv") {
+            // Mensagem privada (recebida ou eco da minha própria)
+            const souEu = dados.eco === true;
+            const friendId = souEu ? dados.para_id : dados.de_id;
+            _registrarPV(friendId, dados.de_nome, dados.texto, souEu);
+            if (!souEu) {
+                // Notifica no chat principal se o PV não estiver aberto com ele
+                if (!pvAtual || pvAtual.id !== friendId) {
+                    appendChatMsg("sistema", [{text: `✉ PV de ${dados.de_nome}: ${dados.texto}`}]);
+                }
+            }
+        }
+        else if (dados.tipo === "pv_erro") {
+            _socialMsg(dados.mensagem || "Erro no PV.", "erro");
+        }
+        else if (dados.tipo === "perfil_ok") {
+            _perfilMsg("Perfil salvo!", "ok");
+            if (dados.user) {
+                if (dados.user.sprite_id) meuBicho.spriteId = dados.user.sprite_id;
+                if (dados.user.bio !== undefined) {
+                    meuBio = dados.user.bio || "";
+                    const bioEl = document.getElementById("perfilBio");
+                    if (bioEl) bioEl.value = meuBio;
+                }
+            }
+            const btn = document.getElementById("btnSalvarPerfil");
+            if (btn) { btn.disabled = false; btn.textContent = "SALVAR PERFIL"; }
+        }
+        else if (dados.tipo === "perfil_erro") {
+            _perfilMsg(dados.mensagem || "Erro ao salvar.", "erro");
+            const btn = document.getElementById("btnSalvarPerfil");
+            if (btn) { btn.disabled = false; btn.textContent = "SALVAR PERFIL"; }
+        }
+        else if (dados.tipo === "senha_ok") {
+            _perfilMsg(dados.mensagem || "Senha alterada!", "ok");
+            const btn = document.getElementById("btnTrocarSenha");
+            if (btn) { btn.disabled = false; btn.textContent = "ALTERAR SENHA"; }
+            document.getElementById("perfilSenhaAtual").value = "";
+            document.getElementById("perfilNovaSenha").value = "";
+            document.getElementById("perfilConfirmarSenha").value = "";
+        }
+        else if (dados.tipo === "senha_erro") {
+            _perfilMsg(dados.mensagem || "Erro ao trocar senha.", "erro");
+            const btn = document.getElementById("btnTrocarSenha");
+            if (btn) { btn.disabled = false; btn.textContent = "ALTERAR SENHA"; }
         }
         else if (dados.tipo === "movimento") {
             if (outrosJogadores[dados.id]) {
                 if (dados.x > outrosJogadores[dados.id].x) outrosJogadores[dados.id].lado = "direita";
                 else if (dados.x < outrosJogadores[dados.id].x) outrosJogadores[dados.id].lado = "esquerda";
-                outrosJogadores[dados.id].x = dados.x;
-                outrosJogadores[dados.id].y = dados.y;
+                outrosJogadores[dados.id].targetX = dados.x;
+                outrosJogadores[dados.id].targetY = dados.y;
                 outrosJogadores[dados.id].movimentoTimer = 6;
             }
         }
         else if (dados.tipo === "jogador_saiu") {
             if (outrosJogadores[dados.id]) {
-                appendChatMsg("sistema", [{text: `« ${outrosJogadores[dados.id].username} saiu.`}]);
+                registrarDebug("leave", `« ${outrosJogadores[dados.id].username} saiu.`);
                 delete outrosJogadores[dados.id];
             }
+        }
+        else if (dados.tipo === "debug_event") {
+            registrarDebug(dados.categoria || "info", dados.mensagem || "", dados.meta);
         }
         else if (dados.tipo === "chat") {
             appendChatMsg("", [{text: `[${dados.username}]: `, bold: true}, {text: dados.texto}]);
@@ -472,6 +1381,14 @@ chatInput.addEventListener("keypress", (e) => {
     }
 });
 
+// Enter no chat privado (PV)
+const pvInputEl = document.getElementById("pvInput");
+if (pvInputEl) {
+    pvInputEl.addEventListener("keypress", (e) => {
+        if (e.key === "Enter") { e.preventDefault(); enviarPV(); }
+    });
+}
+
 canvas.addEventListener("mousemove", (e) => {
     const rect = canvas.getBoundingClientRect();
     mouseX = Math.floor((e.clientX - rect.left) * (canvas.width / rect.width));
@@ -479,18 +1396,51 @@ canvas.addEventListener("mousemove", (e) => {
 });
 
 window.addEventListener("keydown", (e) => {
+    // Enter pra focar no chat quando não está digitando
+    if (e.code === "Enter" && document.activeElement !== chatInput) {
+        e.preventDefault();
+        chatInput.focus();
+        return;
+    }
     if (document.activeElement === chatInput) return;
     teclas[e.code] = true;
 
+    // Hotkeys globais
     if (e.code === "F2") { e.preventDefault(); mostrarDebug = !mostrarDebug; return; }
     if (e.code === "F1") {
         e.preventDefault();
         const cm = document.getElementById("configMenu");
-        cm.style.display = (cm.style.display === "none" || !cm.style.display) ? "block" : "none";
+        if (cm) cm.style.display = (cm.style.display === "none" || !cm.style.display) ? "block" : "none";
         return;
     }
 
-    // Repassa para a lógica da sala
+    // Q universal — fecha overlays, sai de minigames
+    if (e.code === "KeyQ") {
+        const painel = document.getElementById("emojiPanel");
+        if (painel?.classList.contains("aberto")) {
+            painel.classList.remove("aberto");
+            e.preventDefault(); return;
+        }
+        // PV aberto?
+        const pv = document.getElementById("pvPanel");
+        if (pv?.classList.contains("aberto")) {
+            fecharPV();
+            e.preventDefault(); return;
+        }
+        // Painel social aberto?
+        const social = document.getElementById("socialPanel");
+        if (social?.classList.contains("aberto")) {
+            social.classList.remove("aberto");
+            e.preventDefault(); return;
+        }
+        const overlay = document.getElementById("chatOverlay");
+        if (overlay?.classList.contains("ativo")) {
+            window.fecharChatMobile?.();
+            e.preventDefault(); return;
+        }
+        // Se não fechou nada, passa pra lógica da sala (Pong/Aura/etc)
+    }
+
     if (ws?.readyState === WebSocket.OPEN) {
         const consumido = getLogica()?.onTeclaDown?.(e.code, ws, meuBicho);
         if (consumido) e.preventDefault();
@@ -589,9 +1539,7 @@ function atualizarFisica() {
             meuBicho.x += dx * v;
             meuBicho.y += dy * v;
             meuBicho.animTick += 0.25;
-            if (ws?.readyState === WebSocket.OPEN) {
-                ws.send(JSON.stringify({ tipo: "mover", x: meuBicho.x, y: meuBicho.y, lado: meuBicho.lado }));
-            }
+            movPendente = true;   // marca que há nova posição pra enviar
         } else {
             meuBicho.animTick = 0;
         }
@@ -599,10 +1547,23 @@ function atualizarFisica() {
         meuBicho.x = Math.max(0, Math.min(canvas.width - meuBicho.tamanho, meuBicho.x));
         meuBicho.y = Math.max(0, Math.min(canvas.height - meuBicho.tamanho, meuBicho.y));
 
-        // Verifica portas
+        // Envia movimento com throttle (~15x/s) em vez de a cada frame.
+        // Isso evita floodar o servidor e elimina os "TPs" que outros viam.
+        const agora = performance.now();
+        if (movPendente && agora - ultimoEnvioMov >= INTERVALO_MOV_MS) {
+            if (ws?.readyState === WebSocket.OPEN) {
+                ws.send(JSON.stringify({ tipo: "mover", x: meuBicho.x, y: meuBicho.y, lado: meuBicho.lado }));
+            }
+            ultimoEnvioMov = agora;
+            movPendente = false;
+        }
+
+        // Verifica portas (usa WASM se disponível)
         for (const porta of (MAPAS[minhaSala]?.portas || [])) {
-            if (meuBicho.x < porta.x + porta.w && meuBicho.x + meuBicho.tamanho > porta.x &&
-                meuBicho.y < porta.y + porta.h && meuBicho.y + meuBicho.tamanho > porta.y) {
+            if (Wasm.checkRectOverlap(
+                meuBicho.x, meuBicho.y, meuBicho.tamanho, meuBicho.tamanho,
+                porta.x, porta.y, porta.w, porta.h
+            )) {
                 if (ws?.readyState === WebSocket.OPEN) {
                     ws.send(JSON.stringify({ tipo: "digitando", estado: false }));
                 }
@@ -654,6 +1615,8 @@ function processarTransicao() {
             }
             // Notifica a nova lógica
             getLogica()?.onEnter?.(MAPAS[minhaSala]);
+            // Atualiza likes/favorito da nova sala (se logado com conta)
+            if (contaAtiva) { pedirEstadoSala(); renderizarSocial(); }
         }
     } else if (estadoTransicao === "fade_in") {
         transicaoAlpha -= 0.05;
@@ -745,6 +1708,49 @@ function desenharReguaDebug() {
     ctx.restore();
 }
 
+function _desenharDebugOverlay() {
+    const X = 8, Y = 30, W = 200, H = 230;
+    ctx.save();
+    ctx.fillStyle = "rgba(0,0,0,0.88)";
+    ctx.fillRect(X, Y, W, H);
+    ctx.strokeStyle = "#00ff66"; ctx.lineWidth = 1;
+    ctx.strokeRect(X, Y, W, H);
+
+    ctx.fillStyle = "#00ff66"; ctx.font = "bold 9px monospace"; ctx.textAlign = "left";
+    ctx.fillText("[F2] DEBUG MODE", X+6, Y+12);
+
+    const online = Object.keys(outrosJogadores).length + 1;
+    const stats = [
+        `sala:    ${minhaSala}`,
+        `pos:     ${Math.floor(meuBicho.x)}, ${Math.floor(meuBicho.y)}`,
+        `online:  ${online}`,
+        `ws:      ${ws?.readyState === WebSocket.OPEN ? 'OK' : 'OFF'}`,
+        `wasm:    ${Wasm.ready ? 'ON' : 'fallback JS'}`,
+        `mouse:   ${mouseX}, ${mouseY}`,
+    ];
+    ctx.font = "8px monospace"; ctx.fillStyle = "#aaeeaa";
+    stats.forEach((s, i) => ctx.fillText(s, X+6, Y+28+i*11));
+
+    ctx.strokeStyle = "rgba(0,255,100,0.3)";
+    ctx.beginPath(); ctx.moveTo(X+4, Y+100); ctx.lineTo(X+W-4, Y+100); ctx.stroke();
+    ctx.fillStyle = "#00ff66"; ctx.font = "8px monospace";
+    ctx.fillText("─ EVENTOS ─", X+6, Y+112);
+
+    const linhas = Math.min(debugLog.length, 12);
+    const start  = debugLog.length - linhas;
+    for (let i = 0; i < linhas; i++) {
+        const ev = debugLog[start + i];
+        const cor = ev.categoria === "join"  ? "#88ff88"
+                  : ev.categoria === "leave" ? "#ff8888"
+                  : ev.categoria === "error" ? "#ff5555" : "#cccccc";
+        ctx.fillStyle = cor;
+        let txt = `${ev.ts.slice(0,5)} ${ev.mensagem}`;
+        if (txt.length > 30) txt = txt.slice(0, 28) + "…";
+        ctx.fillText(txt, X+6, Y+124+i*9);
+    }
+    ctx.restore();
+}
+
 // =====================================================
 //   RENDERIZAÇÃO — frame
 // =====================================================
@@ -772,6 +1778,20 @@ function desenhar() {
     // Outros jogadores
     for (const id in outrosJogadores) {
         const p = outrosJogadores[id];
+        // Interpolação suave em direção à última posição recebida do servidor.
+        // Protege contra targetX/Y indefinidos (evita NaN).
+        if (p.targetX === undefined) p.targetX = p.x;
+        if (p.targetY === undefined) p.targetY = p.y;
+        const dx = p.targetX - p.x;
+        const dy = p.targetY - p.y;
+        // Se a distância for grande (jogador deu "tp" real, ex: mudou de sala),
+        // snap direto em vez de deslizar lentamente.
+        if (Math.abs(dx) > 80 || Math.abs(dy) > 80) {
+            p.x = p.targetX; p.y = p.targetY;
+        } else {
+            p.x += dx * 0.25;
+            p.y += dy * 0.25;
+        }
         const bobeio = p.animTick > 0 ? Math.abs(Math.sin(p.animTick)) * -5 : 0;
         const img = imagensSprites[p.spriteId];
         if (img?.complete && img.naturalWidth !== 0) {
@@ -825,7 +1845,10 @@ function desenhar() {
         console.error(`[render:${minhaSala}]`, e);
     }
 
-    if (mostrarDebug) desenharReguaDebug();
+    if (mostrarDebug) {
+        desenharReguaDebug();
+        _desenharDebugOverlay();
+    }
 
     if (transicaoAlpha > 0) {
         ctx.fillStyle = `rgba(0,0,0,${transicaoAlpha})`;
