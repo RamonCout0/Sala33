@@ -453,41 +453,56 @@ def verificar_senha(senha: str, stored: str) -> bool:
 
 
 # ──────────────────────────────────────────────────────────────
-#   ENVIO DE EMAIL DE RESET — Gmail SMTP em thread separada
+#  ENVIO DE EMAIL DE RESET — API HTTP (Brevo) em thread separada
 # ──────────────────────────────────────────────────────────────
-SMTP_ATIVO = bool(os.environ.get("SMTP_USER") and os.environ.get("SMTP_PASS"))
+EMAIL_ATIVO = bool(os.environ.get("BREVO_API_KEY"))
 
 def _enviar_email_reset_thread(email: str, username: str, token: str):
-    """Executa o envio SMTP em thread separada — não bloqueia o loop de jogo."""
+    """Executa o envio via API HTTP em thread separada — não bloqueia o jogo."""
+    import urllib.request
+    import json
+    
     link = f"https://sala33.app.br/?reset={token}"
+    api_key = os.environ.get("BREVO_API_KEY")
+    
+    url = "https://api.brevo.com/v3/smtp/email"
+    headers = {
+        "api-key": api_key,
+        "Content-Type": "application/json",
+        "Accept": "application/json"
+    }
+    
+    # O remetente pode ser fictício na Brevo, mas use algo com a cara do jogo
+    payload = {
+        "sender": {"name": "Sala 33", "email": "suporte@sala33.app.br"},
+        "to": [{"email": email, "name": username}],
+        "subject": "Recuperação de senha — Sala 33",
+        "textContent": f"Olá, {username}!\n\nVocê pediu pra redefinir sua senha na Sala 33.\nUse o link abaixo (válido por 1 hora):\n\n{link}\n\nSe não foi você, ignore este email."
+    }
+    
+    data = json.dumps(payload).encode("utf-8")
+    
     try:
-        import smtplib
-        from email.message import EmailMessage
-        msg = EmailMessage()
-        msg["Subject"] = "Recuperação de senha — Sala 33"
-        msg["From"] = os.environ.get("SMTP_FROM", os.environ["SMTP_USER"])
-        msg["To"] = email
-        msg.set_content(
-            f"Olá, {username}!\n\nVocê pediu pra redefinir sua senha na Sala 33.\n"
-            f"Use o link abaixo (válido por 1 hora):\n\n{link}\n\n"
-            f"Se não foi você, ignore este email.")
-        with smtplib.SMTP_SSL("smtp.gmail.com", 587) as srv:
-            srv.starttls()
-            srv.login(os.environ["SMTP_USER"], os.environ["SMTP_PASS"])
-            srv.send_message(msg)
-        print(f"[reset] email enviado para {username} <{email}>")
+        req = urllib.request.Request(url, data=data, headers=headers, method="POST")
+        with urllib.request.urlopen(req) as response:
+            print(f"[reset] email enviado via API para {username} <{email}>")
     except Exception as e:
-        print(f"[reset] falha ao enviar email: {e}")
+        # Se der erro, ele lê a resposta da API para facilitar o diagnóstico
+        if hasattr(e, 'read'):
+            print(f"[reset] falha na API: {e.read().decode('utf-8')}")
+        else:
+            print(f"[reset] falha ao enviar email via API: {e}")
 
 def enviar_email_reset(email: str, username: str, token: str) -> bool:
-    """Dispara o envio em background (fire-and-forget). Retorna imediatamente."""
+    """Dispara o envio em background (fire-and-forget)."""
     link = f"https://sala33.app.br/?reset={token}"
-    if not SMTP_ATIVO:
+    if not EMAIL_ATIVO:
         print(f"[reset] (email desativado) {username} <{email or 'sem email'}> → {link}")
         return False
     if not email:
         print(f"[reset] usuário {username} não tem email cadastrado")
         return False
+        
     threading.Thread(target=_enviar_email_reset_thread, args=(email, username, token), daemon=True).start()
     return True
 
