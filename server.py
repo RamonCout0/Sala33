@@ -471,7 +471,8 @@ def _enviar_email_reset_thread(email: str, username: str, token: str):
             f"Olá, {username}!\n\nVocê pediu pra redefinir sua senha na Sala 33.\n"
             f"Use o link abaixo (válido por 1 hora):\n\n{link}\n\n"
             f"Se não foi você, ignore este email.")
-        with smtplib.SMTP_SSL("smtp.gmail.com", 465) as srv:
+        with smtplib.SMTP_SSL("smtp.gmail.com", 587) as srv:
+            srv.starttls()
             srv.login(os.environ["SMTP_USER"], os.environ["SMTP_PASS"])
             srv.send_message(msg)
         print(f"[reset] email enviado para {username} <{email}>")
