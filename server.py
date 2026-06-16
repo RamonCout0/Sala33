@@ -194,6 +194,25 @@ class Banco:
         except Exception:
             return None
 
+    async def buscar_usuario_por_id(self, user_id):
+        if not self.ativo: return None
+        try:
+            row = await self.pool.fetchrow(
+                "SELECT id,username,password_hash,sprite_id,bio,email FROM users WHERE id=$1",
+                user_id)
+            return dict(row) if row else None
+        except Exception:
+            return None
+
+    async def atualizar_senha(self, user_id, novo_hash):
+        if not self.ativo: return False
+        try:
+            await self.pool.execute(
+                "UPDATE users SET password_hash=$2 WHERE id=$1", user_id, novo_hash)
+            return True
+        except Exception:
+            return False
+
     async def atualizar_perfil(self, user_id, sprite_id, bio):
         if not self.ativo: return None
         try:
@@ -340,7 +359,7 @@ class Banco:
             # Token expira em 1 hora
             await self.pool.execute(
                 "INSERT INTO password_resets(user_id, token, expires_at) "
-                "VALUES($1, $2, NOW() + INTERVAL '1 hour')",
+                "VALUES($1, $2, NOW() + INTERVAL '4 minutes')",
                 user["id"], token)
             return (user, token)
         except Exception:
@@ -544,8 +563,14 @@ EMAIL_ATIVO = bool(os.environ.get("BREVO_API_KEY"))
 def _enviar_email_reset_thread(email: str, username: str, token: str):
     """Executa o envio via API HTTP em thread separada — não bloqueia o jogo."""
     import urllib.request
+<<<<<<< HEAD
 
     link = f"https://sala33.app.br/?reset={token}"
+=======
+    import json
+    
+    link = f"https://sala33.app.br/reset.html?token={token}"
+>>>>>>> f942be6f54a7c6af2b75cac131c9ffb7db2087af
     api_key = os.environ.get("BREVO_API_KEY")
 
     url = "https://api.brevo.com/v3/smtp/email"
@@ -559,12 +584,16 @@ def _enviar_email_reset_thread(email: str, username: str, token: str):
         "sender": {"name": "Sala 33", "email": "suporte@sala33.app.br"},
         "to": [{"email": email, "name": username}],
         "subject": "Recuperação de senha — Sala 33",
+<<<<<<< HEAD
         "textContent": (
             f"Olá, {username}!\n\n"
             f"Você pediu pra redefinir sua senha na Sala 33.\n"
             f"Use o link abaixo (válido por 1 hora):\n\n{link}\n\n"
             f"Se não foi você, ignore este email."
         )
+=======
+        "textContent": f"Olá, {username}!\n\nVocê pediu pra redefinir sua senha na Sala 33.\nUse o link abaixo (válido por 4 minutos):\n\n{link}\n\nSe não foi você, ignore este email."
+>>>>>>> f942be6f54a7c6af2b75cac131c9ffb7db2087af
     }
 
     data = json.dumps(payload).encode("utf-8")
@@ -581,7 +610,7 @@ def _enviar_email_reset_thread(email: str, username: str, token: str):
 
 def enviar_email_reset(email: str, username: str, token: str) -> bool:
     """Dispara o envio em background (fire-and-forget)."""
-    link = f"https://sala33.app.br/?reset={token}"
+    link = f"https://sala33.app.br/reset.html?token={token}"
     if not EMAIL_ATIVO:
         print(f"[reset] (email desativado) {username} <{email or 'sem email'}> → {link}")
         return False
@@ -1012,6 +1041,24 @@ async def handler_ws(websocket, hub):
                 if user:
                     if sprite: s.sprite_id = sprite
                     await s.enviar({"tipo":"perfil_ok","user":user})
+                continue
+
+            if tipo == "trocar_senha":
+                if not s.user_id:
+                    await s.enviar({"tipo":"senha_erro","mensagem":"Apenas contas podem trocar a senha."}); continue
+                senha_atual = str(d.get("senha_atual", ""))
+                nova_senha  = str(d.get("nova_senha", ""))
+                if len(nova_senha) < 6:
+                    await s.enviar({"tipo":"senha_erro","mensagem":"Nova senha precisa de 6+ caracteres."}); continue
+                user = await banco.buscar_usuario_por_id(s.user_id)
+                if not user or not verificar_senha(senha_atual, user["password_hash"]):
+                    await s.enviar({"tipo":"senha_erro","mensagem":"Senha atual incorreta."}); continue
+                ok = await banco.atualizar_senha(s.user_id, hash_senha(nova_senha))
+                if ok:
+                    await s.enviar({"tipo":"senha_ok","mensagem":"Senha atualizada com sucesso!"})
+                    banco.log(s.user_id, s.username, "change_password")
+                else:
+                    await s.enviar({"tipo":"senha_erro","mensagem":"Erro ao atualizar senha."})
                 continue
 
             if tipo == "listar_amigos":

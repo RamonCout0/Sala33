@@ -576,6 +576,111 @@
             100% { opacity: 0; transform: translate(-50%, -50%) scale(1.0); }
         }
 
+        /* ===== BOTÃO PERFIL ===== */
+        #btnPerfilToggle {
+            position: fixed;
+            top: 52px; right: 12px;
+            width: auto; padding: 8px 14px;
+            background: #161616; color: #aaa;
+            border: 2px solid #444;
+            font-family: 'Courier New', monospace;
+            font-size: 11px; font-weight: bold; letter-spacing: 2px;
+            cursor: pointer; box-shadow: 3px 3px 0 #000;
+            z-index: 150;
+        }
+        #btnPerfilToggle:hover { border-color: #aaa; background: #222; color: #fff; }
+
+        /* ===== OVERLAY + PAINEL DE PERFIL ===== */
+        #perfilOverlay {
+            display: none;
+            position: fixed; inset: 0;
+            background: rgba(0,0,0,0.55);
+            z-index: 300;
+        }
+        #perfilPanel {
+            display: none;
+            position: fixed;
+            top: 50%; left: 50%;
+            transform: translate(-50%, -50%);
+            width: 340px; max-width: 92vw;
+            max-height: 90vh;
+            background: #0f0f0f;
+            border: 2px solid #555;
+            z-index: 310;
+            padding: 20px;
+            overflow-y: auto;
+            box-shadow: 0 8px 40px rgba(0,0,0,0.9);
+        }
+        #perfilHeader {
+            display: flex; justify-content: space-between; align-items: center;
+            border-bottom: 1px solid #333; padding-bottom: 10px; margin-bottom: 16px;
+            font-size: 12px; letter-spacing: 3px; color: #fff;
+            font-family: 'Courier New', monospace;
+        }
+        .perfil-secao { margin-bottom: 16px; }
+        .perfil-username {
+            font-size: 16px; color: #fff; letter-spacing: 2px;
+            font-family: 'Courier New', monospace; font-weight: bold;
+            padding: 6px 0;
+        }
+        #perfilBio {
+            width: 100%; height: 70px;
+            background: #1a1a1a; color: #ccc;
+            border: 2px solid #444; font-family: 'Courier New', monospace;
+            font-size: 12px; padding: 8px; outline: none; resize: none;
+            margin-bottom: 0;
+        }
+        #perfilBio:focus { border-color: #fff; }
+        .perfil-skin-row {
+            display: flex; gap: 12px; align-items: center;
+        }
+        .perfil-skin-row select {
+            flex: 1;
+        }
+        #perfilSpritePreview {
+            width: 32px; height: 32px;
+            image-rendering: pixelated;
+        }
+        .perfil-input {
+            width: 100%; padding: 9px; background: #1a1a1a; color: #fff;
+            border: 2px solid #444; font-family: 'Courier New', monospace;
+            font-size: 13px; text-align: center; outline: none;
+            margin-bottom: 10px; display: block;
+        }
+        .perfil-input:focus { border-color: #fff; }
+        .perfil-divisor {
+            border-top: 1px solid #2a2a2a; margin: 18px 0;
+        }
+        #btnSalvarPerfil {
+            width: 100%; padding: 11px; margin-top: 14px;
+            background: #fff; color: #0d0d0d;
+            border: none; font-family: 'Courier New', monospace;
+            font-weight: bold; font-size: 13px; cursor: pointer;
+            box-shadow: 3px 3px 0 #555; letter-spacing: 1px;
+        }
+        #btnSalvarPerfil:hover { background: #ccc; }
+        #btnSalvarPerfil:disabled { opacity: 0.5; cursor: not-allowed; }
+        #btnTrocarSenha {
+            width: 100%; padding: 11px;
+            background: #1a1010; color: #ff8888;
+            border: 2px solid #4a1a1a; font-family: 'Courier New', monospace;
+            font-weight: bold; font-size: 13px; cursor: pointer;
+            box-shadow: 3px 3px 0 #000; letter-spacing: 1px;
+        }
+        #btnTrocarSenha:hover { border-color: #ff6666; color: #ffaaaa; }
+        #btnTrocarSenha:disabled { opacity: 0.5; cursor: not-allowed; }
+        #perfilMsg {
+            font-size: 10px; letter-spacing: 1px; padding: 8px;
+            margin-bottom: 12px; text-align: left; display: none;
+            font-family: 'Courier New', monospace;
+        }
+        #perfilMsg.erro { display: block; background: #2a1010; color: #ff6666; border: 1px solid #ff6666; }
+        #perfilMsg.ok   { display: block; background: #102a10; color: #66ff88; border: 1px solid #66ff88; }
+
+        @media (max-width: 850px) {
+            #btnPerfilToggle { top: auto; bottom: 6px; right: 6px; padding: 6px 10px; font-size: 9px; }
+        }
+
     </style>
 </head>
 <body>
@@ -612,12 +717,6 @@
             <div id="voltarLogin">
                 <a href="#" onclick="trocarAba('entrar'); return false;">← Voltar ao login</a>
             </div>
-        </div>
-
-        <!-- Reset: aplicar nova senha (quando chega via link ?reset=TOKEN) -->
-        <div id="resetAplicarFields" style="display:none;">
-            <p style="font-size:11px; color:#66ccff; margin-bottom:12px;">Defina sua nova senha:</p>
-            <input type="password" id="resetNovaSenha" placeholder="NOVA SENHA" maxlength="64">
         </div>
 
         <!-- Nome do convidado -->
@@ -686,6 +785,9 @@
     <button id="btnSocialToggle" onclick="toggleSocial()" style="display:none;">
         ★ AMIGOS
     </button>
+    <button id="btnPerfilToggle" onclick="togglePerfil()" style="display:none;">
+        ⚙ PERFIL
+    </button>
 
     <div id="socialPanel">
         <div id="socialHeader">
@@ -739,6 +841,54 @@
             <input type="text" id="pvInput" placeholder="Mensagem privada..." maxlength="200">
             <button onclick="enviarPV()">➤</button>
         </div>
+    </div>
+
+    <!-- ===== PAINEL DE PERFIL ===== -->
+    <div id="perfilOverlay" onclick="fecharPerfilOverlay(event)" style="display:none;"></div>
+    <div id="perfilPanel" style="display:none;">
+        <div id="perfilHeader">
+            <span>// MEU PERFIL</span>
+            <button onclick="togglePerfil()" class="social-close">&#10005;</button>
+        </div>
+
+        <div id="perfilMsg"></div>
+
+        <!-- Info do usuário -->
+        <div class="perfil-secao">
+            <div class="social-titulo">USUÁRIO</div>
+            <div id="perfilUsername" class="perfil-username"></div>
+        </div>
+
+        <!-- Bio -->
+        <div class="perfil-secao">
+            <div class="social-titulo">BIO (máx. 280 caracteres)</div>
+            <textarea id="perfilBio" maxlength="280" placeholder="Escreva algo sobre você..."></textarea>
+        </div>
+
+        <!-- Skin -->
+        <div class="perfil-secao">
+            <div class="social-titulo">PERSONAGEM</div>
+            <div class="perfil-skin-row">
+                <select id="perfilSpriteSelect"></select>
+                <div class="preview-window" style="flex-shrink:0;">
+                    <img id="perfilSpritePreview" src="" alt="Preview">
+                    <div id="perfilFallback" class="preview-fallback">32x32</div>
+                </div>
+            </div>
+        </div>
+
+        <button onclick="salvarPerfil()" id="btnSalvarPerfil">SALVAR PERFIL</button>
+
+        <div class="perfil-divisor"></div>
+
+        <!-- Trocar senha -->
+        <div class="perfil-secao">
+            <div class="social-titulo">TROCAR SENHA</div>
+            <input type="password" id="perfilSenhaAtual" placeholder="SENHA ATUAL" maxlength="64" class="perfil-input">
+            <input type="password" id="perfilNovaSenha" placeholder="NOVA SENHA" maxlength="64" class="perfil-input">
+            <input type="password" id="perfilConfirmarSenha" placeholder="CONFIRMAR NOVA SENHA" maxlength="64" class="perfil-input">
+        </div>
+        <button onclick="trocarSenhaPerfil()" id="btnTrocarSenha">ALTERAR SENHA</button>
     </div>
 
     <script src="game.js"></script>

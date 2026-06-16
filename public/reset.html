@@ -1,0 +1,223 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Redefinir Senha — Sala 33</title>
+    <style>
+        * { box-sizing: border-box; margin: 0; padding: 0; }
+
+        body {
+            background: #0d0d0d;
+            color: #cccccc;
+            font-family: 'Courier New', monospace;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            justify-content: center;
+            min-height: 100vh;
+        }
+
+        .card {
+            background: #161616;
+            border: 4px solid #ffffff;
+            box-shadow: 8px 8px 0px #333333;
+            padding: 36px 32px;
+            width: 360px;
+            max-width: 94vw;
+            text-align: center;
+        }
+
+        h2 {
+            color: #ffffff;
+            font-size: 22px;
+            letter-spacing: 4px;
+            margin-bottom: 6px;
+        }
+
+        .subtitulo {
+            font-size: 10px;
+            color: #555;
+            letter-spacing: 2px;
+            margin-bottom: 28px;
+        }
+
+        .msg {
+            font-size: 10px;
+            letter-spacing: 1px;
+            padding: 10px;
+            margin-bottom: 18px;
+            text-align: left;
+            display: none;
+            border: 1px solid;
+        }
+        .msg.erro { display: block; background: #2a1010; color: #ff6666; border-color: #ff6666; }
+        .msg.ok   { display: block; background: #102a10; color: #66ff88; border-color: #66ff88; }
+
+        label {
+            display: block;
+            font-size: 9px;
+            color: #666;
+            letter-spacing: 2px;
+            text-align: left;
+            margin-bottom: 5px;
+        }
+
+        input[type="password"] {
+            width: 100%;
+            padding: 11px;
+            background: #222;
+            color: #fff;
+            border: 2px solid #555;
+            font-family: 'Courier New', monospace;
+            font-size: 14px;
+            text-align: center;
+            outline: none;
+            margin-bottom: 16px;
+            display: block;
+        }
+        input[type="password"]:focus { border-color: #fff; }
+
+        button {
+            width: 100%;
+            padding: 13px;
+            background: #fff;
+            color: #0d0d0d;
+            border: none;
+            font-family: 'Courier New', monospace;
+            font-weight: bold;
+            font-size: 14px;
+            letter-spacing: 1px;
+            cursor: pointer;
+            box-shadow: 4px 4px 0 #555;
+            margin-top: 4px;
+        }
+        button:hover:not(:disabled) { background: #ccc; }
+        button:disabled { opacity: 0.5; cursor: not-allowed; }
+
+        .voltar {
+            margin-top: 20px;
+            font-size: 10px;
+            color: #555;
+            letter-spacing: 1px;
+        }
+        .voltar a {
+            color: #777;
+            text-decoration: none;
+        }
+        .voltar a:hover { color: #fff; }
+
+        .token-invalido {
+            font-size: 12px;
+            color: #ff6666;
+            padding: 20px 0;
+            line-height: 1.8;
+        }
+    </style>
+</head>
+<body>
+
+<div class="card">
+    <h2>SALA 33</h2>
+    <div class="subtitulo">// REDEFINIR SENHA</div>
+
+    <div id="msg" class="msg"></div>
+
+    <div id="formReset">
+        <label>NOVA SENHA</label>
+        <input type="password" id="novaSenha" placeholder="mínimo 6 caracteres" maxlength="64" autocomplete="new-password">
+
+        <label>CONFIRMAR NOVA SENHA</label>
+        <input type="password" id="confirmarSenha" placeholder="repita a senha" maxlength="64" autocomplete="new-password">
+
+        <button id="btnRedefinir" onclick="redefinir()">REDEFINIR SENHA</button>
+    </div>
+
+    <div id="tokenInvalido" style="display:none;" class="token-invalido">
+        Link inválido ou ausente.<br>
+        Solicite um novo link de recuperação.
+    </div>
+
+    <div class="voltar">
+        <a href="/">← Voltar ao jogo</a>
+    </div>
+</div>
+
+<script>
+    const params  = new URLSearchParams(location.search);
+    const token   = params.get("token");
+
+    if (!token) {
+        document.getElementById("formReset").style.display = "none";
+        document.getElementById("tokenInvalido").style.display = "block";
+    }
+
+    function _wsUrl() {
+        const proto = location.protocol === "https:" ? "wss:" : "ws:";
+        const isLocal = ["localhost", "127.0.0.1"].includes(location.hostname)
+            || location.hostname.startsWith("192.168.")
+            || location.hostname.startsWith("10.");
+        return isLocal ? `ws://${location.hostname}:8080` : `${proto}//${location.host}`;
+    }
+
+    function showMsg(texto, tipo) {
+        const el = document.getElementById("msg");
+        el.textContent = texto;
+        el.className = "msg " + tipo;
+    }
+
+    function redefinir() {
+        const nova      = document.getElementById("novaSenha").value;
+        const confirmar = document.getElementById("confirmarSenha").value;
+        const btn       = document.getElementById("btnRedefinir");
+
+        if (nova.length < 6)       return showMsg("Senha precisa de 6+ caracteres.", "erro");
+        if (nova !== confirmar)    return showMsg("As senhas não coincidem.", "erro");
+        if (!token)                return showMsg("Token ausente. Use o link do email.", "erro");
+
+        btn.disabled = true;
+        btn.textContent = "REDEFININDO...";
+
+        const ws = new WebSocket(_wsUrl());
+
+        ws.onopen = () => {
+            ws.send(JSON.stringify({ tipo: "aplicar_reset", token, password: nova }));
+        };
+
+        ws.onmessage = (e) => {
+            let dados;
+            try { dados = JSON.parse(e.data); } catch { return; }
+
+            if (dados.tipo === "reset_ok") {
+                showMsg(dados.mensagem || "Senha redefinida com sucesso!", "ok");
+                ws.close();
+                btn.textContent = "REDEFINIDO!";
+                // Limpa token da URL e redireciona pro login após 2s
+                setTimeout(() => {
+                    window.location.href = "/?login=1";
+                }, 2000);
+            } else if (dados.tipo === "reset_erro") {
+                showMsg(dados.mensagem || "Link inválido ou expirado.", "erro");
+                ws.close();
+                btn.disabled = false;
+                btn.textContent = "REDEFINIR SENHA";
+            }
+        };
+
+        ws.onerror = () => {
+            showMsg("Erro de conexão com o servidor.", "erro");
+            btn.disabled = false;
+            btn.textContent = "REDEFINIR SENHA";
+        };
+
+        ws.onclose = () => {};
+    }
+
+    // Submete com Enter em qualquer campo
+    document.addEventListener("keydown", (e) => {
+        if (e.key === "Enter") redefinir();
+    });
+</script>
+
+</body>
+</html>
