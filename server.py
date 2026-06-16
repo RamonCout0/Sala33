@@ -46,6 +46,9 @@ PORT_WS       = int(os.environ.get("PORT", 8080))
 PORT_HTTP     = int(os.environ.get("PORT_HTTP", 8000))
 DATABASE_URL  = os.environ.get("DATABASE_URL", "")
 JWT_SECRET    = os.environ.get("JWT_SECRET", "")
+# Lista de usernames com tag "DEV" no jogo. Separe por vírgula no Railway,
+# ex: DEV_USERNAMES=FULANO,CICLANO  (use o username tal como aparece no jogo, MAIÚSCULO).
+DEV_USERNAMES = {u.strip().upper() for u in os.environ.get("DEV_USERNAMES", "").split(",") if u.strip()}
 
 if not JWT_SECRET:
     # Gera um segredo efêmero se não estiver configurado.
@@ -564,7 +567,7 @@ def _enviar_email_reset_thread(email: str, username: str, token: str):
     """Executa o envio via API HTTP em thread separada — não bloqueia o jogo."""
     import urllib.request
     import json
-    
+
     link = f"https://sala33.app.br/reset.html?token={token}"
     api_key = os.environ.get("BREVO_API_KEY")
 
@@ -579,7 +582,12 @@ def _enviar_email_reset_thread(email: str, username: str, token: str):
         "sender": {"name": "Sala 33", "email": "suporte@sala33.app.br"},
         "to": [{"email": email, "name": username}],
         "subject": "Recuperação de senha — Sala 33",
-        "textContent": f"Olá, {username}!\n\nVocê pediu pra redefinir sua senha na Sala 33.\nUse o link abaixo (válido por 4 minutos):\n\n{link}\n\nSe não foi você, ignore este email."
+        "textContent": (
+            f"Olá, {username}!\n\n"
+            f"Você pediu pra redefinir sua senha na Sala 33.\n"
+            f"Use o link abaixo (válido por 4 minutos):\n\n{link}\n\n"
+            f"Se não foi você, ignore este email."
+        )
     }
 
     data = json.dumps(payload).encode("utf-8")
@@ -657,7 +665,7 @@ def _sanitize_email(v):
 class Sessao:
     __slots__ = (
         "sid", "ws", "queue", "user_id", "username", "sala",
-        "x", "y", "sprite_id", "lado", "logado",
+        "x", "y", "sprite_id", "lado", "logado", "is_dev",
         "last_move", "last_broadcast_x", "last_broadcast_y",
     )
 
@@ -676,10 +684,12 @@ class Sessao:
         self.sprite_id = "cinzaguy"
         self.lado     = "direita"
         self.logado   = False
+        self.is_dev   = False
 
     def to_dict(self):
         return {"id": self.sid, "username": self.username,
-                "x": self.x, "y": self.y, "spriteId": self.sprite_id, "lado": self.lado}
+                "x": self.x, "y": self.y, "spriteId": self.sprite_id, "lado": self.lado,
+                "isDev": self.is_dev}
 
     async def enviar(self, payload):
         try:
@@ -917,7 +927,8 @@ async def handler_ws(websocket, hub):
                 token = gerar_token(user["id"], user["username"])
                 await s.enviar({"tipo":"auth_ok","token":token,"user":{
                     "id":user["id"],"username":user["username"],
-                    "sprite_id":user["sprite_id"],"bio":user.get("bio","")}})
+                    "sprite_id":user["sprite_id"],"bio":user.get("bio",""),
+                    "isDev":user["username"].upper() in DEV_USERNAMES}})
                 banco.log(user["id"], user["username"], "register")
                 continue
 
@@ -970,7 +981,8 @@ async def handler_ws(websocket, hub):
                 token = gerar_token(user["id"], user["username"])
                 await s.enviar({"tipo":"auth_ok","token":token,"user":{
                     "id":user["id"],"username":user["username"],
-                    "sprite_id":user["sprite_id"],"bio":user.get("bio","")}})
+                    "sprite_id":user["sprite_id"],"bio":user.get("bio",""),
+                    "isDev":user["username"].upper() in DEV_USERNAMES}})
                 banco.log(user["id"], user["username"], "login")
                 continue
 
@@ -996,6 +1008,7 @@ async def handler_ws(websocket, hub):
                 s.sprite_id = _sprite(d.get("spriteId","cinzaguy"))
                 s.lado      = _lado(d.get("lado","direita"))
                 s.logado    = True
+                s.is_dev    = username.upper() in DEV_USERNAMES
 
                 ok = await hub.mover_para_sala(s.sid, SALA_INICIAL)
                 if ok:
@@ -1007,7 +1020,8 @@ async def handler_ws(websocket, hub):
                         extras["online"] = list(hub.usuarios_online_ids())
                         extras["pedidos"] = await banco.listar_pedidos_recebidos(s.user_id)
                     await s.enviar({"tipo":"lista_jogadores","meu_sid":s.sid,
-                                    "jogadores":outros, "conta": bool(s.user_id), **extras})
+                                    "jogadores":outros, "conta": bool(s.user_id),
+                                    "isDev": s.is_dev, **extras})
                     await hub.broadcast(SALA_INICIAL, {"tipo":"novo_jogador", **s.to_dict()}, exceto=s.sid)
                     banco.log(s.user_id, username, "join", SALA_INICIAL)
                 continue
@@ -1318,7 +1332,9 @@ CONTENT_TYPES = {
     ".webm":"video/webm", ".mp3":"audio/mpeg", ".ogg":"audio/ogg",
     ".ico":"image/x-icon", ".wasm":"application/wasm", ".txt":"text/plain",
 }
-SEM_CACHE = {".js", ".json"}
+# SEM CACHE PARA TODOS OS ARQUIVOS
+SEM_CACHE = {".html", ".js", ".json", ".css", ".png", ".jpg", ".jpeg", ".gif", 
+             ".webp", ".mp3", ".ogg", ".mp4", ".webm", ".ico", ".wasm", ".txt"}
 
 def _process_request():
     async def process_request(connection, request):
@@ -1365,7 +1381,8 @@ def rodar_http_background():
         def log_message(self,*a): pass
         def end_headers(self):
             p = self.path.split("?")[0]
-            if p.endswith((".js",".json")):
+            ext = os.path.splitext(p)[1].lower()
+            if ext in SEM_CACHE:
                 self.send_header("Cache-Control","no-cache, no-store, must-revalidate")
             self.send_header("X-Content-Type-Options","nosniff")
             super().end_headers()

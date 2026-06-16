@@ -24,6 +24,7 @@ let meuBicho = {
     username: "", x: 200, y: 150, velocidade: 2, tamanho: 32,
     chatTexto: "", chatTimer: 0, isTyping: false,
     spriteId: "cinzaguy", lado: "direita", animTick: 0,
+    isDev: false,  // <-- ADICIONADO: flag de desenvolvedor
 };
 let outrosJogadores = {};
 let teclas = {};
@@ -585,6 +586,7 @@ function autenticarOuCriar(tipo) {
             localStorage.setItem("sala33_token", tokenConta);
             meuBicho.username = dados.user.username;
             meuBicho.spriteId = dados.user.sprite_id || "cinzaguy";
+            meuBicho.isDev = !!dados.user.isDev;  // <-- ADICIONADO: recebe flag isDev do servidor
             meuUserId = dados.user.id;
             meuBio = dados.user.bio || "";
             wsAuth.close(); wsAuth = null;
@@ -1172,6 +1174,7 @@ function conectar(opts = {}) {
         else if (dados.tipo === "lista_jogadores") {
             // O servidor envia nosso próprio sid na primeira lista
             if (dados.meu_sid) meuSid = dados.meu_sid;
+            meuBicho.isDev = !!dados.isDev;  // <-- ADICIONADO: recebe flag isDev do servidor
             // Conta logada? ativa o painel social e popula amigos/favoritos/pedidos
             if (dados.conta) {
                 contaAtiva = true;
@@ -1586,6 +1589,9 @@ function atualizarFisica() {
         if (outrosJogadores[id].chatTimer > 0) outrosJogadores[id].chatTimer--;
     }
     if (legendaTimer > 0) legendaTimer--;
+    
+    // <-- ADICIONADO: atualiza partículas de fumaça
+    atualizarFumacas();
 }
 
 function processarTransicao() {
@@ -1640,14 +1646,26 @@ function desenharSpriteInvertido(img, x, y, tamanho, lado) {
     }
 }
 
-function desenharCrachaNome(nome, xCentro, yTopo) {
+// <-- SUBSTITUÍDA: versão com suporte a isDev
+function desenharCrachaNome(nome, xCentro, yTopo, isDev = false) {
     ctx.font = "10px monospace";
-    const lt = ctx.measureText(nome).width;
+    const textoCompleto = isDev ? `${nome} ★DEV` : nome;
+    const lt = ctx.measureText(textoCompleto).width;
     const px = 6, lx = lt + px * 2, ay = 14;
     const xb = xCentro - lx / 2, yb = yTopo - ay - 2;
     ctx.fillStyle = "#161616"; ctx.fillRect(xb, yb, lx, ay);
-    ctx.strokeStyle = "#FFFFFF"; ctx.lineWidth = 1; ctx.strokeRect(xb, yb, lx, ay);
-    ctx.fillStyle = "#FFFFFF"; ctx.textAlign = "center"; ctx.fillText(nome, xCentro, yb + 11);
+    ctx.strokeStyle = isDev ? "#FFD24A" : "#FFFFFF";
+    ctx.lineWidth = 1; ctx.strokeRect(xb, yb, lx, ay);
+    if (isDev) {
+        const ltNome = ctx.measureText(nome + " ").width;
+        ctx.textAlign = "left";
+        ctx.fillStyle = "#FFFFFF";
+        ctx.fillText(nome + " ", xb + px, yb + 11);
+        ctx.fillStyle = "#FFD24A";
+        ctx.fillText("★DEV", xb + px + ltNome, yb + 11);
+    } else {
+        ctx.fillStyle = "#FFFFFF"; ctx.textAlign = "center"; ctx.fillText(nome, xCentro, yb + 11);
+    }
 }
 
 function desenharBalao(texto, xCentro, yTopo, ellipsis = false) {
@@ -1788,7 +1806,8 @@ function desenhar() {
         } else {
             ctx.fillStyle = "#888888"; ctx.fillRect(p.x, p.y + bobeio, meuBicho.tamanho, meuBicho.tamanho);
         }
-        desenharCrachaNome(p.username, p.x + meuBicho.tamanho / 2, p.y - 5 + bobeio);
+        // <-- ADICIONADO: passa isDev para o crachá
+        desenharCrachaNome(p.username, p.x + meuBicho.tamanho / 2, p.y - 5 + bobeio, !!p.isDev);
         if (p.chatTimer > 0) desenharBalao(p.chatTexto, p.x + meuBicho.tamanho / 2, p.y + bobeio);
         else if (p.isTyping) desenharBalao("...", p.x + meuBicho.tamanho / 2, p.y + bobeio, true);
     }
@@ -1801,7 +1820,8 @@ function desenhar() {
     } else {
         ctx.fillStyle = "#FFFFFF"; ctx.fillRect(meuBicho.x, meuBicho.y + bobeioMeu, meuBicho.tamanho, meuBicho.tamanho);
     }
-    desenharCrachaNome(meuBicho.username, meuBicho.x + meuBicho.tamanho / 2, meuBicho.y - 5 + bobeioMeu);
+    // <-- ADICIONADO: passa isDev para o crachá do próprio jogador
+    desenharCrachaNome(meuBicho.username, meuBicho.x + meuBicho.tamanho / 2, meuBicho.y - 5 + bobeioMeu, !!meuBicho.isDev);
     if (meuBicho.chatTimer > 0) {
         desenharBalao(meuBicho.chatTexto, meuBicho.x + meuBicho.tamanho / 2, meuBicho.y + bobeioMeu);
     } else if (document.activeElement === chatInput) {
@@ -1849,6 +1869,9 @@ function desenhar() {
         ctx.fillStyle = `rgba(0,0,0,${transicaoAlpha})`;
         ctx.fillRect(0, 0, canvas.width, canvas.height);
     }
+
+    // <-- ADICIONADO: desenha partículas de fumaça
+    desenharFumacas();
 
     ctx.restore();
 }
