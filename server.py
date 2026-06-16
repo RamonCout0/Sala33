@@ -1146,7 +1146,7 @@ async def handler_ws(websocket, hub):
                             await hub.broadcast(sala_antiga, {"tipo":"jogador_saiu","id":s.sid})
                         outros = [o.to_dict() for o in await hub.snapshot_sala(sala_alvo) if o.sid != s.sid]
                         await s.enviar({"tipo":"tp_ok","sala":sala_alvo,
-                                        "x":s.x,"y":s.y,"meu_sid":s.sid,"jogadores":outros})
+                             "x":s.x,"y":s.y,"meu_sid":s.sid,"jogadores":outros, "isDev": s.is_dev})
                         # Os outros veem o jogador chegar COM efeito de fumaça (tp=True)
                         await hub.broadcast(sala_alvo, {"tipo":"novo_jogador", "tp":True, **s.to_dict()}, exceto=s.sid)
                         banco.log(s.user_id, s.username, "tp_amigo", sala_alvo)
@@ -1271,7 +1271,7 @@ async def handler_ws(websocket, hub):
                 if sala_antiga:
                     await hub.broadcast(sala_antiga, {"tipo":"jogador_saiu","id":s.sid})
                 outros = [o.to_dict() for o in await hub.snapshot_sala(nova) if o.sid != s.sid]
-                await s.enviar({"tipo":"lista_jogadores","meu_sid":s.sid,"jogadores":outros})
+                await s.enviar({"tipo":"lista_jogadores","meu_sid":s.sid,"jogadores":outros, "isDev": s.is_dev})
                 await hub.broadcast(nova, {"tipo":"novo_jogador", **s.to_dict()}, exceto=s.sid)
                 banco.log(s.user_id, s.username, "change_room", nova)
 
