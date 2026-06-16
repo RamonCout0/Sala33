@@ -1162,6 +1162,7 @@ function conectar(opts = {}) {
                 dados.animTick = 0; dados.movimentoTimer = 0;
                 dados.targetX = dados.x;   // inicializa alvo p/ interpolação
                 dados.targetY = dados.y;
+                dados.isDev = !!dados.isDev;  // <-- ADICIONADO: recebe flag isDev do servidor
                 outrosJogadores[dados.id] = dados;
                 // Se chegou por teleporte, solta fumaça na posição dele
                 if (dados.tp) {
@@ -1201,6 +1202,7 @@ function conectar(opts = {}) {
                     p.animTick = 0; p.movimentoTimer = 0;
                     p.targetX = p.x;
                     p.targetY = p.y;
+                    p.isDev = !!p.isDev;
                     outrosJogadores[p.id] = p;
                 }
             });
@@ -1261,6 +1263,7 @@ function conectar(opts = {}) {
                     p.lado = p.lado || "direita";
                     p.animTick = 0; p.movimentoTimer = 0;
                     p.targetX = p.x; p.targetY = p.y;
+                    p.isDev = !!p.isDev;
                     outrosJogadores[p.id] = p;
                 }
             });
