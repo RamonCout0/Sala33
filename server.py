@@ -1359,13 +1359,13 @@ def _process_request():
             ("Strict-Transport-Security", "max-age=31536000; includeSubDomains"),
             ("Referrer-Policy", "strict-origin-when-cross-origin"),
             ("Permissions-Policy", "camera=(), microphone=(), geolocation=()"),
-            # CSP: permite scripts do próprio domínio + CDNs usados pelo jogo
+            # CSP ATUALIZADA:
             ("Content-Security-Policy",
              "default-src 'self'; "
-             "script-src 'self' 'unsafe-inline' https://cdn.jsdelivr.net; "
+             "script-src 'self' 'unsafe-inline' 'wasm-unsafe-eval' https://cdn.jsdelivr.net https://static.cloudflareinsights.com; "
              "style-src 'self' 'unsafe-inline'; "
              "img-src 'self' data: https://cdn.jsdelivr.net https://twemoji.maxcdn.com; "
-             "connect-src 'self' wss: ws:; "
+             "connect-src 'self' wss: ws: https://api.brevo.com; "
              "font-src 'self'; "
              "frame-ancestors 'none'"),
         ]
