@@ -5,7 +5,7 @@
     "imagem": "assets/maps/sonhos1.png",
     "musica": "assets/music/musica_viva.mp3",
     "portas": [
-            {"destino": "o_quarto", "x": 212, "y": 299, "w": 20, "h": 40, "spawnX": 42, "spawnY": 53},
+            {"destino": "o_quarto", "x": 174, "y": 299, "w": 20, "h": 40, "spawnX": 42, "spawnY": 53},
             {"destino": "sonhos_2", "x": 190, "y": 0, "w": 20, "h": 10, "spawnX": 183, "spawnY": 242}
     ],
     "extras":{
