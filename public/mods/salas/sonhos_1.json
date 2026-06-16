@@ -1,0 +1,39 @@
+{
+    "id" : "sonhos_1",
+    "nome": "???",
+    "corFundo": "#0a0a0a",
+    "imagem": "assets/maps/sonhos1.png",
+    "musica": "assets/music/musica_viva.mp3",
+    "portas": [
+            {"destino": "o_quarto", "x": 212, "y": 299, "w": 20, "h": 40, "spawnX": 42, "spawnY": 53},
+            {"destino": "sonhos_2", "x": 190, "y": 0, "w": 20, "h": 10, "spawnX": 183, "spawnY": 242}
+    ],
+    "extras":{
+        "zonaSegura": { "x": 180, "y": 0, "w": 40, "h": 299, "_todo": "ajustar coordenadas após teste com F2" },
+        "frasesEco": [
+            "O que é real?",
+            "Tudo é um sonho dentro de outro sonho.",
+            "A realidade é apenas uma ilusão.",
+            "Quem sou eu, realmente?",
+            "Será que existe um 'eu' fora dos sonhos?",
+            "O tempo é diferente aqui.",
+            "Posso sentir o vento, mas não há ar.",
+            "Por que pensa tanto no passado?",
+            "Você não devia estar aqui.",
+            "Isso já passou.",
+            "Solta isso.",
+            "Quantas vezes ainda vai voltar pra esse lugar?",
+            "Não dá pra mudar o que já aconteceu.",
+            "O que você faria se soubesse que tudo é um sonho?",
+            "Não se apegue a nada aqui.",
+            "O que você mais teme?",
+            "O que você mais deseja?",
+            "O que te prende a esse lugar?",
+            "O que te impede de seguir em frente?"
+
+        ],
+         "velocidadeEscurecer": 0.15,
+         "escuridaoMax": 0.85
+
+    }
+}

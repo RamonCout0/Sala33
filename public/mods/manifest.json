@@ -8,13 +8,21 @@
     "floresta",
     "o_quarto",
     "televisao",
-    "raid"
+    "raid",
+    "aquario",
+    "sonhos_1",
+    "sonhos_2",
+    "sonhos_3"
   ],
   "logicas": [
     "sala_jogos",
     "museu",
     "o_quarto",
     "televisao",
-    "raid"
+    "raid",
+    "aquario",
+    "sonhos_1",
+    "sonhos_2",
+    "sonhos_3"
   ]
 }

@@ -1,0 +1,52 @@
+{
+  "id": "sonhos_3",
+  "nome": "Aquele sonho que você tem medo de enfrentar",
+  "corFundo": "#0a0a0a",
+  "imagem": "assets/maps/sonhos3.png",
+  "portas": [
+    { "destino": "the_hub", "x": 390, "y": 130, "w": 20, "h": 40, "spawnX": 184, "spawnY": 216 }
+  ],
+  "extras": {
+    "zonaSegura": { "x": 0, "y": 0, "w": 400, "h": 150, "_todo": "ajustar coordenadas após teste com F2" },
+    "frasesEco": [
+      "Ele está esperando.",
+      "Você sabe o que precisa enfrentar.",
+      "Por que pensa tanto no passado?",
+      "Por que tem tanto medo de enfrentar isso?",
+      "Não dá pra fugir disso pra sempre.",
+      "Enfrente isso de uma vez.",
+      "O que você tem a perder?",
+      "a vida é curta demais pra viver com medo.",
+      "O que você faria se não tivesse medo?"
+    ],
+    "velocidadeEscurecer": 0.15,
+    "escuridaoMax": 0.85,
+    "ser": {
+      "x": 200,
+      "y": 86,
+      "frames": [
+        "assets/bosses/anjo_0.png",
+        "assets/bosses/anjo_1.png",
+        "assets/bosses/anjo_2.png",
+        "assets/bosses/anjo_3.png",
+        "assets/bosses/anjo_4.png",
+        "assets/bosses/anjo_5.png"
+      ],
+      "_frameDelay_info": "ticks entre frames — 8 = ~7.5fps, 6 = ~10fps, 4 = ~15fps",
+      "frameDelay": 8,
+      "raioInteracao": 50,
+      "dialogo": [
+        "...",
+        "Você construiu uma armadura com as suas piores memórias, achando que isso te manteria a salvo.",
+        "Eu entendo. O silêncio é um esconderijo confortável quando o mundo lá fora já machucou demais.",
+        "Mas essa mesma armadura, aos poucos, está te impedindo de respirar.",
+        "As cicatrizes que você tenta esconder... elas não são provas de que você quebrou.",
+        "São provas de que você resistiu. De que você sobreviveu.",
+        "Você não precisa esquecer o que aconteceu. Nem perdoar, se não estiver pronto.",
+        "Só precisa soltar o peso o suficiente para conseguir dar o próximo passo.",
+        "Respire.",
+        "Ainda existe um amanhã. E você merece fazer parte dele."
+      ]
+    }
+  }
+}

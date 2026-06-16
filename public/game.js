@@ -1615,46 +1615,35 @@ function desenharReguaDebug() {
 }
 
 function _desenharDebugOverlay() {
-    const X = 8, Y = 30, W = 200, H = 230;
-    ctx.save();
-    ctx.fillStyle = "rgba(0,0,0,0.88)";
-    ctx.fillRect(X, Y, W, H);
-    ctx.strokeStyle = "#00ff66"; ctx.lineWidth = 1;
-    ctx.strokeRect(X, Y, W, H);
-
-    ctx.fillStyle = "#00ff66"; ctx.font = "bold 9px monospace"; ctx.textAlign = "left";
-    ctx.fillText("[F2] DEBUG MODE", X+6, Y+12);
-
+    // Painel de stats e log renderizado no <div id="debugOverlay">.
+    // Fica fora do canvas (position:fixed), não tapa o jogo.
+    const el = document.getElementById("debugOverlay");
+    if (!el) return;
     const online = Object.keys(outrosJogadores).length + 1;
     const stats = [
-        `sala:    ${minhaSala}`,
-        `pos:     ${Math.floor(meuBicho.x)}, ${Math.floor(meuBicho.y)}`,
-        `online:  ${online}`,
-        `ws:      ${ws?.readyState === WebSocket.OPEN ? 'OK' : 'OFF'}`,
-        `wasm:    ${Wasm.ready ? 'ON' : 'fallback JS'}`,
-        `mouse:   ${mouseX}, ${mouseY}`,
+        `sala:   ${minhaSala}`,
+        `pos:    ${Math.floor(meuBicho.x + meuBicho.tamanho / 2)}, ${Math.floor(meuBicho.y + meuBicho.tamanho / 2)}`,
+        `online: ${online}`,
+        `ws:     ${ws?.readyState === WebSocket.OPEN ? "OK" : "OFF"}`,
+        `wasm:   ${Wasm.ready ? "ON" : "fallback JS"}`,
+        `mouse:  ${mouseX}, ${mouseY}`,
     ];
-    ctx.font = "8px monospace"; ctx.fillStyle = "#aaeeaa";
-    stats.forEach((s, i) => ctx.fillText(s, X+6, Y+28+i*11));
-
-    ctx.strokeStyle = "rgba(0,255,100,0.3)";
-    ctx.beginPath(); ctx.moveTo(X+4, Y+100); ctx.lineTo(X+W-4, Y+100); ctx.stroke();
-    ctx.fillStyle = "#00ff66"; ctx.font = "8px monospace";
-    ctx.fillText("─ EVENTOS ─", X+6, Y+112);
-
     const linhas = Math.min(debugLog.length, 12);
     const start  = debugLog.length - linhas;
-    for (let i = 0; i < linhas; i++) {
+    const eventos = Array.from({ length: linhas }, (_, i) => {
         const ev = debugLog[start + i];
         const cor = ev.categoria === "join"  ? "#88ff88"
                   : ev.categoria === "leave" ? "#ff8888"
                   : ev.categoria === "error" ? "#ff5555" : "#cccccc";
-        ctx.fillStyle = cor;
         let txt = `${ev.ts.slice(0,5)} ${ev.mensagem}`;
-        if (txt.length > 30) txt = txt.slice(0, 28) + "…";
-        ctx.fillText(txt, X+6, Y+124+i*9);
-    }
-    ctx.restore();
+        if (txt.length > 32) txt = txt.slice(0, 30) + "\u2026";
+        return `<div style="color:${cor}">${txt}</div>`;
+    }).join("");
+    el.innerHTML =
+        `<div class="dbg-titulo">[F2] DEBUG</div>` +
+        `<div class="dbg-stats">${stats.map(s => `<div>${s}</div>`).join("")}</div>` +
+        `<div class="dbg-sep">\u2500 EVENTOS \u2500</div>` +
+        `<div>${eventos}</div>`;
 }
 
 // =====================================================
@@ -1751,10 +1740,16 @@ function desenhar() {
         console.error(`[render:${minhaSala}]`, e);
     }
 
+    // Expõe a flag pra plugins (sonhos_*.js usam window.SALA33_DEBUG)
+    window.SALA33_DEBUG = mostrarDebug;
+
     if (mostrarDebug) {
         desenharReguaDebug();
         _desenharDebugOverlay();
     }
+    // Mostra/esconde o painel HTML de debug
+    const _dbgEl = document.getElementById("debugOverlay");
+    if (_dbgEl) _dbgEl.classList.toggle("ativo", mostrarDebug);
 
     if (transicaoAlpha > 0) {
         ctx.fillStyle = `rgba(0,0,0,${transicaoAlpha})`;

@@ -499,9 +499,40 @@
             cursor: pointer; box-shadow: none;
         }
 
+        /* ===== PAINEL DE DEBUG HTML (F2) ===== */
+        /* Stats e log fora do canvas — não cobre o jogo */
+        #debugOverlay {
+            display: none;
+            position: fixed;
+            top: 50%; left: 10px;
+            transform: translateY(-50%);
+            width: 210px;
+            background: rgba(0, 0, 0, 0.9);
+            border: 1px solid #00ff66;
+            padding: 8px 10px;
+            font-family: 'Courier New', monospace;
+            font-size: 8px;
+            color: #aaeeaa;
+            z-index: 300;
+            pointer-events: none;
+            line-height: 1.7;
+        }
+        #debugOverlay.ativo { display: block; }
+        #debugOverlay .dbg-titulo {
+            color: #00ff66; font-weight: bold;
+            font-size: 9px; margin-bottom: 5px;
+        }
+        #debugOverlay .dbg-stats { color: #aaeeaa; margin-bottom: 5px; }
+        #debugOverlay .dbg-sep {
+            color: #00ff66; font-size: 8px;
+            border-top: 1px solid rgba(0,255,100,0.25);
+            padding-top: 4px; margin-bottom: 3px;
+        }
+
         @media (max-width: 850px) {
             #pvPanel { width: 100vw; max-width: 100vw; }
             #btnSocialToggle { top: 6px; right: 6px; padding: 6px 10px; font-size: 9px; }
+            #debugOverlay { left: 4px; width: 170px; font-size: 7px; }
         }
 
         /* ===== ANIMAÇÃO DE TELEPORTE ===== */
@@ -646,6 +677,9 @@
                         <input type="text" id="chatInput" placeholder="Pressione ENTER para falar..." maxlength="200">
         </div>
     </div>
+
+    <!-- ===== PAINEL DE DEBUG (F2) — fora do canvas ===== -->
+    <div id="debugOverlay"></div>
 
     <!-- ===== PAINEL SOCIAL (amigos + favoritar sala) ===== -->
     <!-- Só aparece quando logado com conta. Toggle pelo botão [A]. -->

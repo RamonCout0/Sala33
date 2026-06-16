@@ -1,0 +1,25 @@
+{
+    "id": "aquario",
+    "nome": "AQUÁRIO",
+    "corFundo": "#08243a",
+    "imagem": "assets/maps/aquario.png",
+    "musica": "assets/music/musica_aquario.mp3",
+    "portas": [
+        {
+            "destino": "the_hub", "x": 0, "y": 130, "w": 20, "h": 40, "spawnX": 216 , "spawnY": 182
+        }
+    ],
+    "extras":{
+        "bolhas": {
+            "qtd":12,
+            "velocidadeMin":0.3,
+            "velocidadeMax":1.2,
+            "tamanhoMin":2,
+            "tamanhoMax":6
+        },
+        "distorcao":{
+                "amplitude":1.5,
+                "velocidade": 0.05
+            }
+        }
+    }

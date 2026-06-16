@@ -1,8 +1,9 @@
 # Mecânica: Duelo de Aura (sala "o_quarto")
 # Dois jogadores apertam barra de espaço o mais rápido possível.
-# A aura decai 0.1 por tick (60fps). Quem chega a 7000 primeiro vence.
+# A aura decái 0.1 por tick (60fps). Quem chega a 7000 primeiro vence.
 
 import json
+import time
 
 HANDLES = ["interagir_aura", "spam_aura", "sair_aura"]
 SALA = "o_quarto"
@@ -11,13 +12,17 @@ STATE = {
     "p1_ws": None, "p2_ws": None,
     "p1_poder": 0, "p2_poder": 0,
     "ativo": False,
+    "last_spam": {},   # ws -> timestamp — rate limit por jogador
 }
+
+SPAM_COOLDOWN = 0.05  # mínimo 50ms entre spams (~20/s máximo)
 
 
 def _reset_total():
     STATE["ativo"] = False
     STATE["p1_poder"] = 0
     STATE["p2_poder"] = 0
+    STATE["last_spam"] = {}
 
 
 def on_leave(websocket, JOGADORES):
@@ -27,11 +32,18 @@ def on_leave(websocket, JOGADORES):
         if websocket == STATE["p2_ws"]:
             STATE["p2_ws"] = None
         _reset_total()
+    STATE["last_spam"].pop(websocket, None)
 
 
 async def tick(JOGADORES, SALAS, enviar_para_sala):
     if not STATE["ativo"]:
         return
+
+    # Sanidade: se um dos websockets saiu sem chamar on_leave, reseta
+    if STATE["p1_ws"] and STATE["p1_ws"] not in JOGADORES:
+        STATE["p1_ws"] = None; _reset_total(); return
+    if STATE["p2_ws"] and STATE["p2_ws"] not in JOGADORES:
+        STATE["p2_ws"] = None; _reset_total(); return
 
     STATE["p1_poder"] = max(0, STATE["p1_poder"] - 0.1)
     STATE["p2_poder"] = max(0, STATE["p2_poder"] - 0.1)
@@ -108,6 +120,13 @@ async def handle(tipo, websocket, dados, JOGADORES, SALAS, enviar_para_sala):
     elif tipo == "spam_aura":
         if not STATE["ativo"]:
             return
+        # Rate limit: no máximo 20 spams/s por jogador
+        agora = time.monotonic()
+        ultimo = STATE["last_spam"].get(websocket, 0)
+        if agora - ultimo < SPAM_COOLDOWN:
+            return
+        STATE["last_spam"][websocket] = agora
+
         if websocket == STATE["p1_ws"]:
             STATE["p1_poder"] += 15
             if STATE["p1_poder"] >= 7000:

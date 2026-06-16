@@ -45,10 +45,22 @@ MODO_PRODUCAO = "PORT" in os.environ and "PORT_HTTP" not in os.environ
 PORT_WS       = int(os.environ.get("PORT", 8080))
 PORT_HTTP     = int(os.environ.get("PORT_HTTP", 8000))
 DATABASE_URL  = os.environ.get("DATABASE_URL", "")
-JWT_SECRET    = os.environ.get("JWT_SECRET", "sala33-dev-secret-troque-em-prod")
+JWT_SECRET    = os.environ.get("JWT_SECRET", "")
+
+if not JWT_SECRET:
+    # Gera um segredo efêmero se não estiver configurado.
+    # ATENÇÃO: tokens expiram ao reiniciar o servidor nesse modo.
+    # Defina JWT_SECRET nas variáveis de ambiente do Railway para persistência.
+    import secrets
+    JWT_SECRET = secrets.token_hex(32)
+    print("[AVISO] JWT_SECRET não definido — usando segredo efêmero. Defina no Railway.")
 
 # ──────────────────────────────────────────────────────────────
 #   BANCO DE DADOS — opcional, isolado, não-bloqueante
+#
+#   Toda função de banco é "best-effort": se o pool estiver
+#   indisponível, retorna None/False sem lançar exceção e sem
+#   travar o loop de jogo.
 # ──────────────────────────────────────────────────────────────
 class Banco:
     def __init__(self):
@@ -57,6 +69,7 @@ class Banco:
         self._log_queue = asyncio.Queue(maxsize=2000)
 
     async def conectar(self):
+        """Tenta conectar. Se falhar, marca como inativo e segue a vida."""
         if not DATABASE_URL:
             print("[db] DATABASE_URL não definida — modo sem banco (convidado apenas).")
             return
@@ -84,6 +97,8 @@ class Banco:
         async with self.pool.acquire() as c:
             await c.execute("""
                 CREATE TABLE IF NOT EXISTS users (
+                    -- tabela principal de contas
+                    -- email é opcional mas necessário para reset de senha
                     id SERIAL PRIMARY KEY,
                     username VARCHAR(20) UNIQUE NOT NULL,
                     password_hash VARCHAR(200) NOT NULL,
@@ -92,7 +107,19 @@ class Banco:
                     email VARCHAR(120) DEFAULT '',
                     created_at TIMESTAMPTZ DEFAULT NOW()
                 );
+                -- email opcional: pode ser adicionado a tabelas antigas
                 ALTER TABLE users ADD COLUMN IF NOT EXISTS email VARCHAR(120) DEFAULT '';
+                CREATE TABLE IF NOT EXISTS login_attempts (
+                    id SERIAL PRIMARY KEY,
+                    username VARCHAR(20) NOT NULL,
+                    ip VARCHAR(60) DEFAULT '',
+                    created_at TIMESTAMPTZ DEFAULT NOW()
+                );
+                CREATE INDEX IF NOT EXISTS idx_login_attempts_user ON login_attempts(username, created_at);
+                CREATE TABLE IF NOT EXISTS reset_cooldowns (
+                    username VARCHAR(20) PRIMARY KEY,
+                    last_request TIMESTAMPTZ NOT NULL
+                );
                 CREATE TABLE IF NOT EXISTS password_resets (
                     id SERIAL PRIMARY KEY,
                     user_id INTEGER REFERENCES users(id) ON DELETE CASCADE,
@@ -155,7 +182,7 @@ class Banco:
                 username, password_hash, email or "")
             return dict(row) if row else None
         except Exception:
-            return None
+            return None  # username duplicado ou erro
 
     async def buscar_usuario(self, username):
         if not self.ativo: return None
@@ -200,12 +227,14 @@ class Banco:
             return False
 
     async def criar_pedido_amizade(self, from_id, to_username):
+        """Cria pedido pendente. Retorna dict do alvo, 'ja_amigos', 'self', 'inexistente', ou None."""
         if not self.ativo: return None
         try:
             alvo = await self.buscar_usuario(to_username)
             if not alvo: return "inexistente"
             if alvo["id"] == from_id: return "self"
             if await self.sao_amigos(from_id, alvo["id"]): return "ja_amigos"
+            # Se o alvo já me mandou pedido, aceita direto (vira amizade mútua)
             reverso = await self.pool.fetchval(
                 "SELECT 1 FROM friend_requests WHERE from_id=$1 AND to_id=$2",
                 alvo["id"], from_id)
@@ -220,6 +249,7 @@ class Banco:
             return None
 
     async def listar_pedidos_recebidos(self, user_id):
+        """Pedidos pendentes que EU recebi."""
         if not self.ativo: return []
         try:
             rows = await self.pool.fetch(
@@ -231,6 +261,7 @@ class Banco:
             return []
 
     async def aceitar_pedido(self, user_id, from_id):
+        """user_id aceita o pedido de from_id. Cria amizade mútua (2 linhas)."""
         if not self.ativo: return False
         try:
             existe = await self.pool.fetchval(
@@ -261,6 +292,7 @@ class Banco:
             return False
 
     async def remover_amigo(self, user_id, friend_id):
+        """Remove amizade dos DOIS lados."""
         if not self.ativo: return False
         try:
             await self.pool.execute(
@@ -281,6 +313,7 @@ class Banco:
             return []
 
     async def toggle_favorito(self, user_id, room_id):
+        """Adiciona se não existe, remove se existe. Retorna o novo estado."""
         if not self.ativo: return None
         try:
             existe = await self.pool.fetchval(
@@ -296,7 +329,7 @@ class Banco:
         except Exception:
             return None
 
-    # ---- Reset de senha ----
+    # ---- Reset de senha (estrutura pronta; envio de email plugável) ----
     async def criar_token_reset(self, username):
         if not self.ativo: return (None, None)
         try:
@@ -304,6 +337,7 @@ class Banco:
             if not user:
                 return (None, None)
             token = base64.urlsafe_b64encode(os.urandom(32)).rstrip(b"=").decode()
+            # Token expira em 1 hora
             await self.pool.execute(
                 "INSERT INTO password_resets(user_id, token, expires_at) "
                 "VALUES($1, $2, NOW() + INTERVAL '1 hour')",
@@ -338,7 +372,56 @@ class Banco:
         except Exception:
             return False
 
-    # ---- Likes de sala ----
+    async def registrar_tentativa_login(self, username):
+        """Registra tentativa de login. Retorna True se deve bloquear (>10 em 60s)."""
+        if not self.ativo: return False
+        try:
+            await self.pool.execute(
+                "INSERT INTO login_attempts(username) VALUES($1)", username)
+            await self.pool.execute(
+                "DELETE FROM login_attempts WHERE created_at < NOW() - INTERVAL '60 seconds'")
+            contagem = await self.pool.fetchval(
+                "SELECT COUNT(*) FROM login_attempts WHERE username=$1 "
+                "AND created_at > NOW() - INTERVAL '60 seconds'", username)
+            return int(contagem or 0) > 10
+        except Exception:
+            return False
+
+    async def reset_em_cooldown(self, username):
+        """Retorna True se o usuário pediu reset nos últimos 60 segundos."""
+        if not self.ativo: return False
+        try:
+            row = await self.pool.fetchrow(
+                "SELECT last_request FROM reset_cooldowns WHERE username=$1", username)
+            if not row: return False
+            import datetime
+            delta = datetime.datetime.now(datetime.timezone.utc) - row["last_request"]
+            return delta.total_seconds() < 60
+        except Exception:
+            return False
+
+    async def registrar_reset_cooldown(self, username):
+        """Marca que este usuário acabou de pedir reset (cooldown de 60s)."""
+        if not self.ativo: return
+        try:
+            await self.pool.execute(
+                "INSERT INTO reset_cooldowns(username, last_request) VALUES($1, NOW()) "
+                "ON CONFLICT(username) DO UPDATE SET last_request=NOW()", username)
+        except Exception:
+            pass
+
+    async def limpar_tokens_expirados(self):
+        """Limpeza: remove tokens usados/expirados e tentativas de login antigas."""
+        if not self.ativo: return
+        try:
+            await self.pool.execute(
+                "DELETE FROM password_resets WHERE usado=TRUE OR expires_at < NOW()")
+            await self.pool.execute(
+                "DELETE FROM login_attempts WHERE created_at < NOW() - INTERVAL '10 minutes'")
+        except Exception:
+            pass
+
+    # ---- Likes de sala (global, 1 like por user por sala) ----
     async def contar_likes(self, room_id):
         if not self.ativo: return 0
         try:
@@ -358,6 +441,7 @@ class Banco:
             return False
 
     async def toggle_like(self, user_id, room_id):
+        """Curte/descurte. Retorna (curtiu_bool, total_likes)."""
         if not self.ativo: return (None, 0)
         try:
             existe = await self.pool.fetchval(
@@ -394,7 +478,7 @@ class Banco:
                     "INSERT INTO session_logs(user_id,username,action,room_id) VALUES($1,$2,$3,$4)",
                     batch)
             except Exception:
-                await asyncio.sleep(2)
+                await asyncio.sleep(2)  # erro? espera e continua
 
 
 banco = Banco()
@@ -460,34 +544,36 @@ EMAIL_ATIVO = bool(os.environ.get("BREVO_API_KEY"))
 def _enviar_email_reset_thread(email: str, username: str, token: str):
     """Executa o envio via API HTTP em thread separada — não bloqueia o jogo."""
     import urllib.request
-    import json
-    
+
     link = f"https://sala33.app.br/?reset={token}"
     api_key = os.environ.get("BREVO_API_KEY")
-    
+
     url = "https://api.brevo.com/v3/smtp/email"
     headers = {
         "api-key": api_key,
         "Content-Type": "application/json",
         "Accept": "application/json"
     }
-    
-    # O remetente pode ser fictício na Brevo, mas use algo com a cara do jogo
+
     payload = {
         "sender": {"name": "Sala 33", "email": "suporte@sala33.app.br"},
         "to": [{"email": email, "name": username}],
         "subject": "Recuperação de senha — Sala 33",
-        "textContent": f"Olá, {username}!\n\nVocê pediu pra redefinir sua senha na Sala 33.\nUse o link abaixo (válido por 1 hora):\n\n{link}\n\nSe não foi você, ignore este email."
+        "textContent": (
+            f"Olá, {username}!\n\n"
+            f"Você pediu pra redefinir sua senha na Sala 33.\n"
+            f"Use o link abaixo (válido por 1 hora):\n\n{link}\n\n"
+            f"Se não foi você, ignore este email."
+        )
     }
-    
+
     data = json.dumps(payload).encode("utf-8")
-    
+
     try:
         req = urllib.request.Request(url, data=data, headers=headers, method="POST")
         with urllib.request.urlopen(req) as response:
             print(f"[reset] email enviado via API para {username} <{email}>")
     except Exception as e:
-        # Se der erro, ele lê a resposta da API para facilitar o diagnóstico
         if hasattr(e, 'read'):
             print(f"[reset] falha na API: {e.read().decode('utf-8')}")
         else:
@@ -502,7 +588,7 @@ def enviar_email_reset(email: str, username: str, token: str) -> bool:
     if not email:
         print(f"[reset] usuário {username} não tem email cadastrado")
         return False
-        
+
     threading.Thread(target=_enviar_email_reset_thread, args=(email, username, token), daemon=True).start()
     return True
 
@@ -612,11 +698,13 @@ class Hub:
         return any(s.logado and s.username == username for s in self._sessions.values())
 
     def sessoes_do_usuario(self, user_id):
+        """Todas as sessões online de um user_id (pode ter mais de uma aba)."""
         if user_id is None:
             return []
         return [s for s in self._sessions.values() if s.user_id == user_id and s.logado]
 
     def usuarios_online_ids(self):
+        """Set de user_ids logados com conta agora."""
         return {s.user_id for s in self._sessions.values() if s.user_id and s.logado}
 
     async def mover_para_sala(self, sid, nova_sala):
@@ -654,7 +742,7 @@ class Hub:
 
 
 # ──────────────────────────────────────────────────────────────
-#   SERVER MODS
+#   SERVER MODS (compat com server_mods/*.py)
 # ──────────────────────────────────────────────────────────────
 HANDLERS_POR_TIPO, MODS_COM_TICK, MODS_COM_LEAVE, MOD_SALA = {}, [], [], {}
 
@@ -751,6 +839,7 @@ async def loop_minigames(hub):
 #   HANDLER WEBSOCKET
 # ──────────────────────────────────────────────────────────────
 async def _notificar_amigos_atualizados(hub, user_id):
+    """Reenvia a lista de amigos + pedidos pra todas as sessões online do user_id."""
     sessoes = hub.sessoes_do_usuario(user_id)
     if not sessoes:
         return
@@ -771,6 +860,7 @@ async def escritor(s):
         pass
 
 async def handler_ws(websocket, hub):
+
     try:
         s = Sessao(websocket)
     except Exception as e:
@@ -795,11 +885,11 @@ async def handler_ws(websocket, hub):
             tipo = d.get("tipo")
             if not isinstance(tipo, str): continue
 
-            # ═══ AUTENTICAÇÃO ═══════════════════════════════════
+            # ═══ AUTENTICAÇÃO (via WebSocket) ═══════════════════
             if tipo == "registrar":
                 username = _sanitize_username(d.get("username"))
                 senha = str(d.get("password", ""))
-                email = _sanitize_email(d.get("email")) or ""
+                email = _sanitize_email(d.get("email")) or ""  # opcional
                 if not username:
                     await s.enviar({"tipo":"auth_erro","mensagem":"Nome inválido."}); continue
                 if len(senha) < 6:
@@ -819,18 +909,23 @@ async def handler_ws(websocket, hub):
             # ═══ RESET DE SENHA — solicitar ═════════════════════
             if tipo == "solicitar_reset":
                 username = _sanitize_username(d.get("username"))
+                # Resposta SEMPRE neutra (não vaza se usuário existe)
                 resposta_neutra = {"tipo":"reset_solicitado",
                     "mensagem":"Se a conta existir, enviamos instruções de recuperação."}
                 if not banco.ativo or not username:
                     await s.enviar(resposta_neutra); continue
+                # Cooldown: 1 pedido por username a cada 60s
+                if await banco.reset_em_cooldown(username):
+                    await s.enviar(resposta_neutra); continue
                 user, token = await banco.criar_token_reset(username)
                 if user and token:
+                    await banco.registrar_reset_cooldown(username)
                     enviar_email_reset(user.get("email",""), user["username"], token)
                     banco.log(user["id"], user["username"], "reset_request")
                 await s.enviar(resposta_neutra)
                 continue
 
-            # ═══ RESET DE SENHA — aplicar ═══════════════════════
+            # ═══ RESET DE SENHA — aplicar (com token válido) ════
             if tipo == "aplicar_reset":
                 token_reset = str(d.get("token", ""))
                 nova_senha = str(d.get("password", ""))
@@ -850,6 +945,10 @@ async def handler_ws(websocket, hub):
                 senha = str(d.get("password", ""))
                 if not banco.ativo:
                     await s.enviar({"tipo":"auth_erro","mensagem":"Login indisponível. Entre como convidado."}); continue
+                # Brute force: bloqueia após 10 tentativas em 60s por username
+                bloqueado = await banco.registrar_tentativa_login(username or "")
+                if bloqueado:
+                    await s.enviar({"tipo":"auth_erro","mensagem":"Muitas tentativas. Aguarde 1 minuto."}); continue
                 user = await banco.buscar_usuario(username) if username else None
                 if not user or not verificar_senha(senha, user["password_hash"]):
                     await s.enviar({"tipo":"auth_erro","mensagem":"Usuário ou senha inválidos."}); continue
@@ -860,7 +959,7 @@ async def handler_ws(websocket, hub):
                 banco.log(user["id"], user["username"], "login")
                 continue
 
-            # ═══ LOGIN no jogo ═══════════════════════════════════
+            # ═══ LOGIN no jogo (convidado OU autenticado) ═══════
             if tipo == "login":
                 if s.logado: continue
                 token = d.get("token")
@@ -901,7 +1000,7 @@ async def handler_ws(websocket, hub):
             if not s.logado:
                 continue
 
-            # ═══ PERFIL / SOCIAL ════════════════════════════════
+            # ═══ PERFIL / SOCIAL (requer conta) ═════════════════
             if tipo == "atualizar_perfil":
                 if not s.user_id:
                     await s.enviar({"tipo":"perfil_erro","mensagem":"Apenas contas podem editar perfil."}); continue
@@ -1001,6 +1100,7 @@ async def handler_ws(websocket, hub):
                         outros = [o.to_dict() for o in await hub.snapshot_sala(sala_alvo) if o.sid != s.sid]
                         await s.enviar({"tipo":"tp_ok","sala":sala_alvo,
                                         "x":s.x,"y":s.y,"meu_sid":s.sid,"jogadores":outros})
+                        # Os outros veem o jogador chegar COM efeito de fumaça (tp=True)
                         await hub.broadcast(sala_alvo, {"tipo":"novo_jogador", "tp":True, **s.to_dict()}, exceto=s.sid)
                         banco.log(s.user_id, s.username, "tp_amigo", sala_alvo)
                 continue
@@ -1035,7 +1135,7 @@ async def handler_ws(websocket, hub):
                         await s.enviar({"tipo":"favorito_estado","room_id":room,"favoritado":estado})
                 continue
 
-            # ═══ LIKE na sala ════════════════════════════════════
+            # ═══ LIKE na sala (global) ════════════════════════════
             if tipo == "toggle_like":
                 if s.user_id:
                     room = str(d.get("room_id",""))[:60]
@@ -1045,6 +1145,7 @@ async def handler_ws(websocket, hub):
                                         "curtiu":curtiu,"total":total})
                 continue
 
+            # ═══ Pedir estado da sala (likes + se curti/favoritei) ═══
             if tipo == "estado_sala":
                 room = str(d.get("room_id",""))[:60]
                 if room:
@@ -1056,30 +1157,56 @@ async def handler_ws(websocket, hub):
 
             # ═══ MOVER ══════════════════════════════════════════
             if tipo == "mover":
+
                 sala = hub.sala_de(s.sid)
+
                 if not sala:
                     continue
+
                 agora = time.monotonic()
+
                 if agora - s.last_move < MOVE_RATE_LIMIT:
                     continue
+
                 s.last_move = agora
+
                 x = d.get("x")
                 y = d.get("y")
+
                 if not isinstance(x, (int, float)):
                     continue
+
                 if not isinstance(y, (int, float)):
                     continue
-                s.x = max(0.0, min(368.0, float(x)))
-                s.y = max(0.0, min(268.0, float(y)))
+
+                novo_x = max(0.0, min(368.0, float(x)))
+                novo_y = max(0.0, min(268.0, float(y)))
+
+                s.x = novo_x
+                s.y = novo_y
+
                 s.lado = _lado(d.get("lado", s.lado))
+
                 dx = abs(s.x - s.last_broadcast_x)
                 dy = abs(s.y - s.last_broadcast_y)
+
                 if dx < MOVE_EPSILON and dy < MOVE_EPSILON:
                     continue
+
                 s.last_broadcast_x = s.x
                 s.last_broadcast_y = s.y
-                await hub.broadcast(sala, {"tipo":"movimento","id":s.sid,
-                                           "x":s.x,"y":s.y,"lado":s.lado}, exceto=s.sid)
+
+                await hub.broadcast(
+                    sala,
+                    {
+                        "tipo": "movimento",
+                        "id": s.sid,
+                        "x": s.x,
+                        "y": s.y,
+                        "lado": s.lado
+                    },
+                    exceto=s.sid
+                )
 
             # ═══ MUDAR SALA ═════════════════════════════════════
             elif tipo == "mudar_sala":
@@ -1149,7 +1276,7 @@ async def handler_ws(websocket, hub):
 
 
 # ──────────────────────────────────────────────────────────────
-#   HTTP ESTÁTICO
+#   HTTP ESTÁTICO (porta única em produção)
 # ──────────────────────────────────────────────────────────────
 CONTENT_TYPES = {
     ".html":"text/html; charset=utf-8", ".js":"application/javascript",
@@ -1175,8 +1302,24 @@ def _process_request():
             body = f.read()
         ext = os.path.splitext(file_path)[1].lower()
         ct = CONTENT_TYPES.get(ext, "application/octet-stream")
-        headers = [("Content-Type",ct),("Content-Length",str(len(body))),
-                   ("X-Content-Type-Options","nosniff")]
+        headers = [
+            ("Content-Type", ct),
+            ("Content-Length", str(len(body))),
+            ("X-Content-Type-Options", "nosniff"),
+            ("X-Frame-Options", "SAMEORIGIN"),
+            ("Strict-Transport-Security", "max-age=31536000; includeSubDomains"),
+            ("Referrer-Policy", "strict-origin-when-cross-origin"),
+            ("Permissions-Policy", "camera=(), microphone=(), geolocation=()"),
+            # CSP: permite scripts do próprio domínio + CDNs usados pelo jogo
+            ("Content-Security-Policy",
+             "default-src 'self'; "
+             "script-src 'self' 'unsafe-inline' https://cdn.jsdelivr.net; "
+             "style-src 'self' 'unsafe-inline'; "
+             "img-src 'self' data: https://cdn.jsdelivr.net https://twemoji.maxcdn.com; "
+             "connect-src 'self' wss: ws:; "
+             "font-src 'self'; "
+             "frame-ancestors 'none'"),
+        ]
         if ext in SEM_CACHE:
             headers.append(("Cache-Control","no-cache, no-store, must-revalidate"))
         return Response(200, "OK", WsHeaders(headers), body)
@@ -1213,7 +1356,7 @@ def _ip_local():
 #   MAIN
 # ──────────────────────────────────────────────────────────────
 async def main():
-    await banco.conectar()
+    await banco.conectar()  # tenta conectar; se falhar, segue sem banco
 
     hub = Hub(MANIFEST.get("salas", []))
     carregar_server_mods()
@@ -1223,7 +1366,7 @@ async def main():
     print("="*65)
     print(f"» Modo:    {'PRODUÇÃO (porta única)' if MODO_PRODUCAO else 'LOCAL (duas portas)'}")
     print(f"» Banco:   {'PostgreSQL ✓' if banco.ativo else 'sem banco (só convidado)'}")
-    print(f"» API Email: {'Brevo ativa ✓' if EMAIL_ATIVO else 'desativada (sem BREVO_API_KEY)'}")
+    print(f"» Email:   {'Brevo ativo ✓' if EMAIL_ATIVO else 'desativado (sem BREVO_API_KEY)'}")
     print(f"» Salas:   {', '.join(hub.salas_disponiveis())}")
     print(f"» Sprites: {', '.join(sorted(SPRITES_VALIDOS))}")
     if not MODO_PRODUCAO:
@@ -1235,6 +1378,14 @@ async def main():
     print("="*65)
 
     asyncio.create_task(loop_minigames(hub))
+
+    async def _limpeza_periodica():
+        """A cada 1h: remove tokens de reset expirados e tentativas de login antigas."""
+        while True:
+            await asyncio.sleep(3600)
+            await banco.limpar_tokens_expirados()
+    asyncio.create_task(_limpeza_periodica())
+
     ws_kwargs = dict(max_size=MAX_MSG_BYTES, max_queue=64, ping_interval=30, ping_timeout=10)
 
     def mk(h):
