@@ -1,0 +1,33 @@
+{
+    "id" : "sonhos_2",
+    "nome": "Porque você continua voltando aqui?",
+    "corFundo": "#0a0a0a",
+    "imagem": "assets/maps/sonhos2.png",
+    "portas": [
+            {"destino": "sonhos_1", "x": 212, "y": 299, "w": 20, "h": 40, "spawnX": 184, "spawnY": 17},
+            {"destino": "sonhos_3", "x": 104, "y": 3, "w": 200, "h": 5, "spawnX": 184, "spawnY": 246}
+    ],
+    "extras":{
+        "zonaSegura": { "x": 160, "y": 0, "w": 70, "h": 299, "_todo": "ajustar coordenadas após teste com F2" },
+        "frasesEco": [
+            "você não devia estar aqui.",
+            "viva o presente.",
+            "deixe o passado para trás.",
+            "o futuro é incerto.",
+            "o que passou, passou.",
+            "você é mais do que suas memórias.",
+            "você é mais do que seus erros.",
+            "você é mais do que suas conquistas.",
+            "você é mais do que suas falhas.",
+            "tente seguir em frente, mesmo que seja difícil.",
+            "o que importa é o que você faz agora.",
+            "você tem o poder de mudar sua história.",
+            "você é mais forte do que pensa.",
+            "você é mais resiliente do que imagina."
+
+        ],
+         "velocidadeEscurecer": 0.15,
+         "escuridaoMax": 0.85
+
+    }
+}
