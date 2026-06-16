@@ -74,6 +74,10 @@ const Wasm = {
     async init() {
         try {
             const res = await fetch('wasm/physics.wasm');
+            // Se o arquivo não existe (404) ou foi bloqueado, falha rápido e limpo.
+            // Sem esse check, o browser tenta compilar a página de erro como WASM
+            // e joga um erro confuso de "magic word".
+            if (!res.ok) throw new Error(`HTTP ${res.status}`);
             const buf = await res.arrayBuffer();
             const { instance } = await WebAssembly.instantiate(buf, {
                 env: { memory: new WebAssembly.Memory({ initial: 4 }) }
@@ -83,7 +87,7 @@ const Wasm = {
             this.ready = true;
             console.log('[WASM] physics.wasm carregado ✓');
         } catch (e) {
-            console.warn('[WASM] Não foi possível carregar physics.wasm, usando fallback JS:', e.message);
+            console.info('[WASM] fallback JS ativo:', e.message);
         }
     },
 
