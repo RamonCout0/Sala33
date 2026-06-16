@@ -1331,6 +1331,7 @@ CONTENT_TYPES = {
     ".jpg":"image/jpeg", ".gif":"image/gif", ".mp4":"video/mp4",
     ".webm":"video/webm", ".mp3":"audio/mpeg", ".ogg":"audio/ogg",
     ".ico":"image/x-icon", ".wasm":"application/wasm", ".txt":"text/plain",
+    ".svg":"image/svg+xml", ".webp":"image/webp",
 }
 # SEM CACHE PARA TODOS OS ARQUIVOS
 SEM_CACHE = {".html", ".js", ".json", ".css", ".png", ".jpg", ".jpeg", ".gif", 
