@@ -205,13 +205,16 @@ const imagensSprites = {};
 const imagensCenarios = {};
 
 function carregarImagens() {
+    // Cache-bust via timestamp: garante que o browser sempre busca a versão
+    // mais recente dos assets, ignorando qualquer cache local ou de CDN.
+    const bust = `?v=${Date.now()}`;
     for (const id in PATHS_SPRITES) {
         imagensSprites[id] = new Image();
-        imagensSprites[id].src = PATHS_SPRITES[id];
+        imagensSprites[id].src = PATHS_SPRITES[id] + bust;
     }
     for (const nomeSala in MAPAS) {
         imagensCenarios[nomeSala] = new Image();
-        imagensCenarios[nomeSala].src = MAPAS[nomeSala].imagemPath;
+        imagensCenarios[nomeSala].src = MAPAS[nomeSala].imagemPath + bust;
     }
 }
 
