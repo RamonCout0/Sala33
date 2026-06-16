@@ -563,14 +563,9 @@ EMAIL_ATIVO = bool(os.environ.get("BREVO_API_KEY"))
 def _enviar_email_reset_thread(email: str, username: str, token: str):
     """Executa o envio via API HTTP em thread separada — não bloqueia o jogo."""
     import urllib.request
-<<<<<<< HEAD
-
-    link = f"https://sala33.app.br/?reset={token}"
-=======
     import json
     
     link = f"https://sala33.app.br/reset.html?token={token}"
->>>>>>> f942be6f54a7c6af2b75cac131c9ffb7db2087af
     api_key = os.environ.get("BREVO_API_KEY")
 
     url = "https://api.brevo.com/v3/smtp/email"
@@ -584,16 +579,7 @@ def _enviar_email_reset_thread(email: str, username: str, token: str):
         "sender": {"name": "Sala 33", "email": "suporte@sala33.app.br"},
         "to": [{"email": email, "name": username}],
         "subject": "Recuperação de senha — Sala 33",
-<<<<<<< HEAD
-        "textContent": (
-            f"Olá, {username}!\n\n"
-            f"Você pediu pra redefinir sua senha na Sala 33.\n"
-            f"Use o link abaixo (válido por 1 hora):\n\n{link}\n\n"
-            f"Se não foi você, ignore este email."
-        )
-=======
         "textContent": f"Olá, {username}!\n\nVocê pediu pra redefinir sua senha na Sala 33.\nUse o link abaixo (válido por 4 minutos):\n\n{link}\n\nSe não foi você, ignore este email."
->>>>>>> f942be6f54a7c6af2b75cac131c9ffb7db2087af
     }
 
     data = json.dumps(payload).encode("utf-8")
