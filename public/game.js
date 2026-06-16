@@ -184,12 +184,19 @@ function tocarMusica(id) {
         audios[id] = new Audio(AUDIO_PATHS[id]);
         audios[id].loop = true;
         audios[id].volume = volumeGeral;
+        audios[id].preload = "auto";
     }
-    if (audioTocando === audios[id]) return;
-    if (audioTocando) { audioTocando.pause(); audioTocando.currentTime = 0; }
+    // Já está tocando essa faixa? não reinicia (evita corte ao reentrar na sala)
+    if (audioTocando === audios[id] && !audios[id].paused) return;
+    if (audioTocando && audioTocando !== audios[id]) {
+        audioTocando.pause();
+        audioTocando.currentTime = 0;
+    }
     audioTocando = audios[id];
     audioTocando.volume = volumeGeral;
-    audioTocando.play().catch(() => { /* aguarda clique do usuário */ });
+    // play() retorna promise — se falhar (autoplay bloqueado), ignora silenciosamente
+    const p = audioTocando.play();
+    if (p) p.catch(() => { /* aguarda interação do usuário */ });
 }
 
 function ajustarVolume(v) {

@@ -1333,9 +1333,11 @@ CONTENT_TYPES = {
     ".ico":"image/x-icon", ".wasm":"application/wasm", ".txt":"text/plain",
     ".svg":"image/svg+xml", ".webp":"image/webp",
 }
-# SEM CACHE PARA TODOS OS ARQUIVOS
-SEM_CACHE = {".html", ".js", ".json", ".css", ".png", ".jpg", ".jpeg", ".gif", 
-             ".webp", ".mp3", ".ogg", ".mp4", ".webm", ".ico", ".wasm", ".txt"}
+# SEM CACHE: só código e config (mudam toda hora durante dev).
+# Mídia (mp3/ogg/mp4/webm) PRECISA ser cacheada — sem isso o browser
+# rebaixa o arquivo toda hora e a música corta/trava no meio do loop.
+# Imagens ficam fora também porque o game.js já faz cache-bust via ?v=timestamp.
+SEM_CACHE = {".html", ".js", ".json", ".css", ".wasm"}
 
 def _process_request():
     async def process_request(connection, request):
