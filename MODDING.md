@@ -57,6 +57,7 @@ Pra criar uma sala chamada `minha_sala`:
 - Fundo: `public/assets/maps/minha_sala.png` (PNG, JPG, GIF ou MP4/WEBM para fundo animado)
 - Música: `public/assets/music/minha_sala.mp3` (opcional)
 
+
 > **Sobre GIF e MP4 como fundo:** GIF é exibido como imagem estática no canvas (só o primeiro frame). Para fundo animado de verdade, use MP4 ou WEBM e implemente via plugin em `mods/logicas/` usando um elemento `<video>` como fonte do `drawImage` a cada frame.
 
 **Exemplo de plugin com fundo em vídeo animado:**
@@ -135,6 +136,7 @@ O engine vai tentar carregar o vídeo como `<img>` (vai falhar silenciosamente) 
 ```
 
 Cada porta tem o retângulo de colisão (`x, y, w, h`) e a posição onde o jogador aparece (`spawnX, spawnY`) na sala de **destino**.
+> **⚠️ OBS!:** quando Forem fazer os TPs, sempre soma ou diminua 16 por exemplo se você quiser colocar na posição x: 200 adicione 16 e fica 216, isso é só motivos na programção do sprite, é essência da gambiarra que da certo.
 
 ### 3. Registre no manifest
 

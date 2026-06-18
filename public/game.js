@@ -24,6 +24,7 @@ let meuBicho = {
     username: "", x: 200, y: 150, velocidade: 2, tamanho: 32,
     chatTexto: "", chatTimer: 0, isTyping: false,
     spriteId: "cinzaguy", lado: "direita", animTick: 0,
+    isDev: false,  // <-- ADICIONADO: flag de desenvolvedor
 };
 let outrosJogadores = {};
 let teclas = {};
@@ -73,6 +74,10 @@ const Wasm = {
     async init() {
         try {
             const res = await fetch('wasm/physics.wasm');
+            // Se o arquivo não existe (404) ou foi bloqueado, falha rápido e limpo.
+            // Sem esse check, o browser tenta compilar a página de erro como WASM
+            // e joga um erro confuso de "magic word".
+            if (!res.ok) throw new Error(`HTTP ${res.status}`);
             const buf = await res.arrayBuffer();
             const { instance } = await WebAssembly.instantiate(buf, {
                 env: { memory: new WebAssembly.Memory({ initial: 4 }) }
@@ -82,7 +87,7 @@ const Wasm = {
             this.ready = true;
             console.log('[WASM] physics.wasm carregado ✓');
         } catch (e) {
-            console.warn('[WASM] Não foi possível carregar physics.wasm, usando fallback JS:', e.message);
+            console.info('[WASM] fallback JS ativo:', e.message);
         }
     },
 
@@ -179,12 +184,19 @@ function tocarMusica(id) {
         audios[id] = new Audio(AUDIO_PATHS[id]);
         audios[id].loop = true;
         audios[id].volume = volumeGeral;
+        audios[id].preload = "auto";
     }
-    if (audioTocando === audios[id]) return;
-    if (audioTocando) { audioTocando.pause(); audioTocando.currentTime = 0; }
+    // Já está tocando essa faixa? não reinicia (evita corte ao reentrar na sala)
+    if (audioTocando === audios[id] && !audios[id].paused) return;
+    if (audioTocando && audioTocando !== audios[id]) {
+        audioTocando.pause();
+        audioTocando.currentTime = 0;
+    }
     audioTocando = audios[id];
     audioTocando.volume = volumeGeral;
-    audioTocando.play().catch(() => { /* aguarda clique do usuário */ });
+    // play() retorna promise — se falhar (autoplay bloqueado), ignora silenciosamente
+    const p = audioTocando.play();
+    if (p) p.catch(() => { /* aguarda interação do usuário */ });
 }
 
 function ajustarVolume(v) {
@@ -200,13 +212,16 @@ const imagensSprites = {};
 const imagensCenarios = {};
 
 function carregarImagens() {
+    // Cache-bust via timestamp: garante que o browser sempre busca a versão
+    // mais recente dos assets, ignorando qualquer cache local ou de CDN.
+    const bust = `?v=${Date.now()}`;
     for (const id in PATHS_SPRITES) {
         imagensSprites[id] = new Image();
-        imagensSprites[id].src = PATHS_SPRITES[id];
+        imagensSprites[id].src = PATHS_SPRITES[id] + bust;
     }
     for (const nomeSala in MAPAS) {
         imagensCenarios[nomeSala] = new Image();
-        imagensCenarios[nomeSala].src = MAPAS[nomeSala].imagemPath;
+        imagensCenarios[nomeSala].src = MAPAS[nomeSala].imagemPath + bust;
     }
 }
 
@@ -585,6 +600,7 @@ function autenticarOuCriar(tipo) {
             localStorage.setItem("sala33_token", tokenConta);
             meuBicho.username = dados.user.username;
             meuBicho.spriteId = dados.user.sprite_id || "cinzaguy";
+            meuBicho.isDev = !!dados.user.isDev;  // <-- ADICIONADO: recebe flag isDev do servidor
             meuUserId = dados.user.id;
             meuBio = dados.user.bio || "";
             wsAuth.close(); wsAuth = null;
@@ -1160,6 +1176,7 @@ function conectar(opts = {}) {
                 dados.animTick = 0; dados.movimentoTimer = 0;
                 dados.targetX = dados.x;   // inicializa alvo p/ interpolação
                 dados.targetY = dados.y;
+                dados.isDev = !!dados.isDev;  // <-- ADICIONADO: recebe flag isDev do servidor
                 outrosJogadores[dados.id] = dados;
                 // Se chegou por teleporte, solta fumaça na posição dele
                 if (dados.tp) {
@@ -1172,6 +1189,7 @@ function conectar(opts = {}) {
         else if (dados.tipo === "lista_jogadores") {
             // O servidor envia nosso próprio sid na primeira lista
             if (dados.meu_sid) meuSid = dados.meu_sid;
+            meuBicho.isDev = !!dados.isDev;  // <-- ADICIONADO: recebe flag isDev do servidor
             // Conta logada? ativa o painel social e popula amigos/favoritos/pedidos
             if (dados.conta) {
                 contaAtiva = true;
@@ -1198,6 +1216,7 @@ function conectar(opts = {}) {
                     p.animTick = 0; p.movimentoTimer = 0;
                     p.targetX = p.x;
                     p.targetY = p.y;
+                    p.isDev = !!p.isDev;
                     outrosJogadores[p.id] = p;
                 }
             });
@@ -1258,6 +1277,7 @@ function conectar(opts = {}) {
                     p.lado = p.lado || "direita";
                     p.animTick = 0; p.movimentoTimer = 0;
                     p.targetX = p.x; p.targetY = p.y;
+                    p.isDev = !!p.isDev;
                     outrosJogadores[p.id] = p;
                 }
             });
@@ -1586,6 +1606,9 @@ function atualizarFisica() {
         if (outrosJogadores[id].chatTimer > 0) outrosJogadores[id].chatTimer--;
     }
     if (legendaTimer > 0) legendaTimer--;
+    
+    // <-- ADICIONADO: atualiza partículas de fumaça
+    atualizarFumacas();
 }
 
 function processarTransicao() {
@@ -1640,14 +1663,26 @@ function desenharSpriteInvertido(img, x, y, tamanho, lado) {
     }
 }
 
-function desenharCrachaNome(nome, xCentro, yTopo) {
+// <-- SUBSTITUÍDA: versão com suporte a isDev
+function desenharCrachaNome(nome, xCentro, yTopo, isDev = false) {
     ctx.font = "10px monospace";
-    const lt = ctx.measureText(nome).width;
+    const textoCompleto = isDev ? `${nome} ★DEV` : nome;
+    const lt = ctx.measureText(textoCompleto).width;
     const px = 6, lx = lt + px * 2, ay = 14;
     const xb = xCentro - lx / 2, yb = yTopo - ay - 2;
     ctx.fillStyle = "#161616"; ctx.fillRect(xb, yb, lx, ay);
-    ctx.strokeStyle = "#FFFFFF"; ctx.lineWidth = 1; ctx.strokeRect(xb, yb, lx, ay);
-    ctx.fillStyle = "#FFFFFF"; ctx.textAlign = "center"; ctx.fillText(nome, xCentro, yb + 11);
+    ctx.strokeStyle = isDev ? "#FFD24A" : "#FFFFFF";
+    ctx.lineWidth = 1; ctx.strokeRect(xb, yb, lx, ay);
+    if (isDev) {
+        const ltNome = ctx.measureText(nome + " ").width;
+        ctx.textAlign = "left";
+        ctx.fillStyle = "#FFFFFF";
+        ctx.fillText(nome + " ", xb + px, yb + 11);
+        ctx.fillStyle = "#FFD24A";
+        ctx.fillText("★DEV", xb + px + ltNome, yb + 11);
+    } else {
+        ctx.fillStyle = "#FFFFFF"; ctx.textAlign = "center"; ctx.fillText(nome, xCentro, yb + 11);
+    }
 }
 
 function desenharBalao(texto, xCentro, yTopo, ellipsis = false) {
@@ -1788,7 +1823,8 @@ function desenhar() {
         } else {
             ctx.fillStyle = "#888888"; ctx.fillRect(p.x, p.y + bobeio, meuBicho.tamanho, meuBicho.tamanho);
         }
-        desenharCrachaNome(p.username, p.x + meuBicho.tamanho / 2, p.y - 5 + bobeio);
+        // <-- ADICIONADO: passa isDev para o crachá
+        desenharCrachaNome(p.username, p.x + meuBicho.tamanho / 2, p.y - 5 + bobeio, !!p.isDev);
         if (p.chatTimer > 0) desenharBalao(p.chatTexto, p.x + meuBicho.tamanho / 2, p.y + bobeio);
         else if (p.isTyping) desenharBalao("...", p.x + meuBicho.tamanho / 2, p.y + bobeio, true);
     }
@@ -1801,7 +1837,8 @@ function desenhar() {
     } else {
         ctx.fillStyle = "#FFFFFF"; ctx.fillRect(meuBicho.x, meuBicho.y + bobeioMeu, meuBicho.tamanho, meuBicho.tamanho);
     }
-    desenharCrachaNome(meuBicho.username, meuBicho.x + meuBicho.tamanho / 2, meuBicho.y - 5 + bobeioMeu);
+    // <-- ADICIONADO: passa isDev para o crachá do próprio jogador
+    desenharCrachaNome(meuBicho.username, meuBicho.x + meuBicho.tamanho / 2, meuBicho.y - 5 + bobeioMeu, !!meuBicho.isDev);
     if (meuBicho.chatTimer > 0) {
         desenharBalao(meuBicho.chatTexto, meuBicho.x + meuBicho.tamanho / 2, meuBicho.y + bobeioMeu);
     } else if (document.activeElement === chatInput) {
@@ -1849,6 +1886,9 @@ function desenhar() {
         ctx.fillStyle = `rgba(0,0,0,${transicaoAlpha})`;
         ctx.fillRect(0, 0, canvas.width, canvas.height);
     }
+
+    // <-- ADICIONADO: desenha partículas de fumaça
+    desenharFumacas();
 
     ctx.restore();
 }
