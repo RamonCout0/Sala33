@@ -1,0 +1,15 @@
+{
+  "name": "sala33",
+  "version": "2.1.0",
+  "description": "SALA 33 — MMO de chat de salas 2D (backrooms). Frontend Canvas 2D + Vite.",
+  "type": "module",
+  "private": true,
+  "scripts": {
+    "dev": "vite",
+    "build": "vite build",
+    "preview": "vite preview"
+  },
+  "devDependencies": {
+    "vite": "^6.0.0"
+  }
+}

@@ -1,0 +1,10 @@
+# Railway / Nixpacks — projeto DUAL: Python (servidor) + Node (build do frontend Vite).
+#
+# `providers` faz o Nixpacks preparar os dois ambientes:
+#   - python  -> instala requirements.txt (websockets, asyncpg)
+#   - node    -> instala package.json (vite) via npm
+# Depois, a fase de build gera o dist/ (que o server.py serve automaticamente).
+providers = ["python", "node"]
+
+[phases.build]
+cmds = ["npm run build"]

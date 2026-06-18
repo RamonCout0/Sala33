@@ -12,10 +12,16 @@
 #   Filosofia: o banco NUNCA fica no caminho crítico do jogo.
 #   Movimento, chat e salas funcionam mesmo sem Postgres.
 # =====================================================
+import sys
 import asyncio
 import json
 import logging
 import os
+
+# Console Windows (cp1252) estoura nos prints com ✓/✗/setas. Força UTF-8 no stdout/stderr.
+for _stream in (sys.stdout, sys.stderr):
+    try: _stream.reconfigure(encoding="utf-8")
+    except Exception: pass
 import pkgutil
 import importlib
 import re
@@ -40,7 +46,11 @@ logging.getLogger("websockets.asyncio.server").setLevel(logging.CRITICAL)
 #   AMBIENTE
 # ──────────────────────────────────────────────────────────────
 ROOT_DIR      = os.path.dirname(os.path.abspath(__file__))
-PUBLIC_DIR    = os.path.join(ROOT_DIR, "public")
+PUBLIC_DIR    = os.path.join(ROOT_DIR, "public")   # fonte: assets, mods (config do server) e wasm
+DIST_DIR      = os.path.join(ROOT_DIR, "dist")     # saída do build do Vite (frontend)
+# Diretório servido via HTTP. Em produção use o build (dist/); cai pra public/ se ainda
+# não houver build (compat com o fluxo antigo). Pode forçar via env STATIC_DIR.
+STATIC_DIR    = os.environ.get("STATIC_DIR") or (DIST_DIR if os.path.isdir(DIST_DIR) else PUBLIC_DIR)
 MODO_PRODUCAO = "PORT" in os.environ and "PORT_HTTP" not in os.environ
 PORT_WS       = int(os.environ.get("PORT", 8080))
 PORT_HTTP     = int(os.environ.get("PORT_HTTP", 8000))
@@ -722,6 +732,30 @@ class Hub:
     def username_em_uso(self, username):
         return any(s.logado and s.username == username for s in self._sessions.values())
 
+    async def reservar_username(self, s, username):
+        """Reserva o username de forma ATÔMICA (resolve a race condition do login).
+        Retorna 'ok' ou 'em_uso'. Se for a MESMA conta logada em outra aba,
+        expulsa a sessão antiga em vez de barrar (sessão única por conta)."""
+        antigas = []
+        async with self._lock:
+            for o in self._sessions.values():
+                if o is s or not o.logado or o.username != username:
+                    continue
+                # Mesma conta (mesmo user_id) => derruba a antiga em vez de barrar.
+                if s.user_id is not None and o.user_id == s.user_id:
+                    antigas.append(o)
+                else:
+                    return "em_uso"
+            # Reserva atômica: ninguém mais passa por este nome enquanto seguramos o lock.
+            s.username = username
+            s.logado = True
+        # Expulsa as sessões antigas FORA do lock (enviar/close podem aguardar I/O).
+        for o in antigas:
+            await o.enviar({"tipo": "erro_login", "mensagem": "Conta conectada em outro lugar."})
+            try: await o.ws.close()
+            except Exception: pass
+        return "ok"
+
     def sessoes_do_usuario(self, user_id):
         """Todas as sessões online de um user_id (pode ter mais de uma aba)."""
         if user_id is None:
@@ -1001,14 +1035,17 @@ async def handler_ws(websocket, hub):
                     if not username:
                         await s.enviar({"tipo":"erro_login","mensagem":"Nome inválido."}); continue
                     s.user_id = None
-                if hub.username_em_uso(username):
-                    await s.enviar({"tipo":"erro_login","mensagem":f"'{username}' já está online."}); continue
+                    # Convidado NÃO pode usar nome de uma conta registrada (mesmo offline).
+                    if banco.ativo and await banco.buscar_usuario(username):
+                        await s.enviar({"tipo":"erro_login","mensagem":f"'{username}' é uma conta registrada. Faça login ou escolha outro nome."}); continue
 
-                s.username  = username
                 s.sprite_id = _sprite(d.get("spriteId","cinzaguy"))
                 s.lado      = _lado(d.get("lado","direita"))
-                s.logado    = True
                 s.is_dev    = username.upper() in DEV_USERNAMES
+
+                # Claim atômico: resolve a race de login duplicado e define username+logado.
+                if await hub.reservar_username(s, username) == "em_uso":
+                    await s.enviar({"tipo":"erro_login","mensagem":f"'{username}' já está online."}); continue
 
                 ok = await hub.mover_para_sala(s.sid, SALA_INICIAL)
                 if ok:
@@ -1345,8 +1382,8 @@ def _process_request():
             return None
         path = request.path.split("?")[0]
         if path == "/": path = "/index.html"
-        file_path = os.path.realpath(os.path.join(PUBLIC_DIR, path.lstrip("/")))
-        if not file_path.startswith(os.path.realpath(PUBLIC_DIR)):
+        file_path = os.path.realpath(os.path.join(STATIC_DIR, path.lstrip("/")))
+        if not file_path.startswith(os.path.realpath(STATIC_DIR)):
             return Response(403, "Forbidden", WsHeaders([("Content-Length","9")]), b"Forbidden")
         if not os.path.isfile(file_path):
             return Response(404, "Not Found", WsHeaders([("Content-Length","9")]), b"Not Found")
@@ -1380,7 +1417,7 @@ def _process_request():
 
 def rodar_http_background():
     class H(SimpleHTTPRequestHandler):
-        def __init__(self,*a,**k): super().__init__(*a, directory=PUBLIC_DIR, **k)
+        def __init__(self,*a,**k): super().__init__(*a, directory=STATIC_DIR, **k)
         def log_message(self,*a): pass
         def end_headers(self):
             p = self.path.split("?")[0]
