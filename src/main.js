@@ -11,6 +11,7 @@ import { inicializarPainelEmojis, appendChatMsg, atualizarPreviewSkin, traduzirE
 import { setSocket, _wsUrl } from "./net/socket.js";
 import { initPerfil, _perfilMsg } from "./ui/perfil.js";
 import { initAuth, _authMsg } from "./ui/auth.js";
+import { initSocial, estadoSocial, renderizarSocial, renderizarPV, _registrarPV, _socialMsg, pedirEstadoSala, enviarPV, fecharPV } from "./ui/social.js";
 
 // ----- Sistema de plugins de lógica por sala -----
 window.SALA33_LOGICAS = {};
@@ -194,11 +195,6 @@ window.enviarEmote = enviarEmote;
 let contaAtiva = false;            // logado com conta?
 let meuUserId = null;              // meu id de usuário (conta)
 let meuBio = "";                   // bio do perfil
-let meusAmigos = [];               // [{id, username, sprite_id}]
-let meusFavoritos = [];            // ["the_hub", ...]
-let meusPedidos = [];              // pedidos recebidos [{id, username, sprite_id}]
-let amigosOnline = new Set();      // ids de amigos online agora
-let likesSala = {};                // { room_id: {total, curtiu} }
 
 // Injeta no módulo de perfil o jogador e um getter da bio atual
 initPerfil({ meuBicho, getBio: () => meuBio });
@@ -217,97 +213,15 @@ initAuth({
     },
 });
 
-// Estado do chat privado
-let pvAtual = null;                // {id, username} do amigo com quem converso
-const pvHistorico = {};            // { friendId: [ {de, texto, ts, eu} ] }
+// Injeta no módulo social os acessos ao estado do jogo
+initSocial({
+    meuBicho,
+    getMinhaSala: () => minhaSala,
+    getContaAtiva: () => contaAtiva,
+    getOutrosJogadores: () => outrosJogadores,
+});
 
-function toggleSocial() {
-    const painel = document.getElementById("socialPanel");
-    if (!painel) return;
-    painel.classList.toggle("aberto");
-    if (painel.classList.contains("aberto")) {
-        // Pede lista atualizada ao abrir (traz status online + pedidos)
-        if (ws?.readyState === WebSocket.OPEN && contaAtiva) {
-            ws.send(JSON.stringify({ tipo: "listar_amigos" }));
-        }
-        renderizarSocial();
-    }
-}
-window.toggleSocial = toggleSocial;
 
-function _socialMsg(texto, tipo) {
-    const el = document.getElementById("socialMsg");
-    if (!el) return;
-    el.textContent = texto;
-    el.className = tipo || "";
-    if (texto) setTimeout(() => { el.textContent = ""; el.className = ""; }, 4000);
-}
-
-function adicionarAmigo() {
-    const input = document.getElementById("inputAddAmigo");
-    const nome = input.value.trim().toUpperCase();
-    if (!nome) return;
-    if (nome === meuBicho.username) return _socialMsg("Você não pode se adicionar.", "erro");
-    if (ws?.readyState === WebSocket.OPEN) {
-        ws.send(JSON.stringify({ tipo: "add_amigo", username: nome }));
-        input.value = "";
-    }
-}
-window.adicionarAmigo = adicionarAmigo;
-
-function aceitarPedido(fromId) {
-    if (ws?.readyState === WebSocket.OPEN)
-        ws.send(JSON.stringify({ tipo: "aceitar_pedido", from_id: fromId }));
-}
-window.aceitarPedido = aceitarPedido;
-
-function recusarPedido(fromId) {
-    if (ws?.readyState === WebSocket.OPEN)
-        ws.send(JSON.stringify({ tipo: "recusar_pedido", from_id: fromId }));
-    // Remove localmente na hora
-    meusPedidos = meusPedidos.filter(p => p.id !== fromId);
-    renderizarSocial();
-}
-window.recusarPedido = recusarPedido;
-
-function removerAmigo(friendId) {
-    if (ws?.readyState === WebSocket.OPEN) {
-        ws.send(JSON.stringify({ tipo: "remover_amigo", friend_id: friendId }));
-    }
-}
-window.removerAmigo = removerAmigo;
-
-function tpAmigo(friendId) {
-    if (ws?.readyState === WebSocket.OPEN) {
-        ws.send(JSON.stringify({ tipo: "tp_amigo", friend_id: friendId }));
-    }
-}
-window.tpAmigo = tpAmigo;
-
-function toggleFavoritoSalaAtual() {
-    if (ws?.readyState === WebSocket.OPEN) {
-        ws.send(JSON.stringify({ tipo: "toggle_favorito", room_id: minhaSala }));
-    }
-}
-window.toggleFavoritoSalaAtual = toggleFavoritoSalaAtual;
-
-function toggleLikeSalaAtual() {
-    if (ws?.readyState === WebSocket.OPEN) {
-        ws.send(JSON.stringify({ tipo: "toggle_like", room_id: minhaSala }));
-    }
-}
-window.toggleLikeSalaAtual = toggleLikeSalaAtual;
-
-// Painel de perfil (togglePerfil / salvarPerfil / trocarSenhaPerfil / _perfilMsg)
-// vive em ui/perfil.js. As respostas (perfil_ok/senha_ok) são tratadas no loop de
-// mensagens abaixo, que chama _perfilMsg importado.
-
-// Pede ao servidor o estado de likes da sala atual (total + se eu curti)
-function pedirEstadoSala() {
-    if (ws?.readyState === WebSocket.OPEN && minhaSala) {
-        ws.send(JSON.stringify({ tipo: "estado_sala", room_id: minhaSala }));
-    }
-}
 
 // Dispara a animação visual de teleporte (flash cinza + label "TELEPORTADO")
 function animarTeleporte() {
@@ -327,227 +241,6 @@ function animarTeleporte() {
 
 // Partículas de fumaça (spawnFumaca / atualizarFumacas / desenharFumacas) vivem em render/particles.js
 
-// Amigo online: ou está na lista de amigosOnline (servidor) ou na minha sala
-function _amigoEstaOnline(amigo) {
-    if (amigosOnline.has(amigo.id)) return true;
-    for (const id in outrosJogadores) {
-        if (outrosJogadores[id].username === amigo.username) return true;
-    }
-    return false;
-}
-
-// ---------- CHAT PRIVADO (PV) ----------
-function abrirPV(friendId, friendName) {
-    pvAtual = { id: friendId, username: friendName };
-    if (!pvHistorico[friendId]) pvHistorico[friendId] = [];
-    const painel = document.getElementById("pvPanel");
-    const titulo = document.getElementById("pvTitulo");
-    if (titulo) titulo.textContent = `// PV: ${friendName}`;
-    if (painel) painel.classList.add("aberto");
-    renderizarPV();
-    setTimeout(() => document.getElementById("pvInput")?.focus(), 80);
-}
-window.abrirPV = abrirPV;
-
-function fecharPV() {
-    document.getElementById("pvPanel")?.classList.remove("aberto");
-    pvAtual = null;
-}
-window.fecharPV = fecharPV;
-
-function enviarPV() {
-    const input = document.getElementById("pvInput");
-    if (!input || !pvAtual) return;
-    const texto = input.value.trim();
-    if (!texto) return;
-    if (ws?.readyState === WebSocket.OPEN) {
-        ws.send(JSON.stringify({ tipo: "pv", friend_id: pvAtual.id, texto: traduzirEmotes(texto) }));
-        input.value = "";
-    }
-}
-window.enviarPV = enviarPV;
-
-function _registrarPV(friendId, de, texto, eu) {
-    if (!pvHistorico[friendId]) pvHistorico[friendId] = [];
-    pvHistorico[friendId].push({ de, texto, ts: horaAtualBrasil(), eu });
-    if (pvHistorico[friendId].length > 100) pvHistorico[friendId].shift();
-    // Se o PV está aberto com esse amigo, re-renderiza
-    if (pvAtual && pvAtual.id === friendId) renderizarPV();
-}
-
-function renderizarPV() {
-    const box = document.getElementById("pvBox");
-    if (!box || !pvAtual) return;
-    const hist = pvHistorico[pvAtual.id] || [];
-    box.innerHTML = "";
-    if (hist.length === 0) {
-        const vazio = document.createElement("div");
-        vazio.className = "pv-sistema";
-        vazio.textContent = `Início da conversa com ${pvAtual.username}.`;
-        box.appendChild(vazio);
-    } else {
-        hist.forEach(m => {
-            const div = document.createElement("div");
-            div.className = "pv-msg" + (m.eu ? " eu" : "");
-            const hora = document.createElement("span");
-            hora.className = "pv-hora";
-            hora.textContent = m.ts;
-            const de = document.createElement("span");
-            de.className = "pv-de";
-            de.textContent = (m.eu ? "você" : m.de) + ": ";
-            div.appendChild(hora);
-            div.appendChild(de);
-            div.appendChild(document.createTextNode(m.texto));
-            if (window.twemoji) {
-                twemoji.parse(div, { base: "https://cdn.jsdelivr.net/gh/twitter/twemoji@14.0.2/assets/", folder: "72x72", ext: ".png" });
-                _aplicarGrayscaleEmojis(div);
-            }
-            box.appendChild(div);
-        });
-    }
-    box.scrollTop = box.scrollHeight;
-}
-
-function renderizarSocial() {
-    // Botão de favoritar reflete o estado da sala atual
-    const btnFav = document.getElementById("btnFavSala");
-    if (btnFav) {
-        const favoritada = meusFavoritos.includes(minhaSala);
-        btnFav.classList.toggle("ativo", favoritada);
-        btnFav.textContent = favoritada
-            ? `★ SALA FAVORITADA (${minhaSala})`
-            : `☆ FAVORITAR ESTA SALA`;
-    }
-
-    // Botão de like reflete total + se eu curti
-    const btnLike = document.getElementById("btnLikeSala");
-    const likeCount = document.getElementById("likeCount");
-    if (btnLike) {
-        const info = likesSala[minhaSala] || { total: 0, curtiu: false };
-        if (likeCount) likeCount.textContent = info.total;
-        btnLike.classList.toggle("ativo", !!info.curtiu);
-        // ♥ cheio se curti, ♡ vazio se não
-        btnLike.innerHTML = (info.curtiu ? "♥" : "♡") + ` <span id="likeCount">${info.total}</span> LIKES`;
-    }
-
-    // Pedidos de amizade recebidos
-    const secaoPedidos = document.getElementById("secaoPedidos");
-    const listaPedidos = document.getElementById("listaPedidos");
-    const pedidosCount = document.getElementById("pedidosCount");
-    if (pedidosCount) pedidosCount.textContent = meusPedidos.length;
-    if (secaoPedidos) secaoPedidos.style.display = meusPedidos.length > 0 ? "block" : "none";
-    if (listaPedidos) {
-        listaPedidos.innerHTML = "";
-        meusPedidos.forEach(p => {
-            const item = document.createElement("div");
-            item.className = "pedido-item";
-            const nome = document.createElement("span");
-            nome.textContent = p.username;
-            const acoes = document.createElement("div");
-            acoes.className = "pedido-acoes";
-            const aceitar = document.createElement("button");
-            aceitar.className = "pedido-btn pedido-aceitar";
-            aceitar.textContent = "✓";
-            aceitar.title = "Aceitar";
-            aceitar.onclick = () => aceitarPedido(p.id);
-            const recusar = document.createElement("button");
-            recusar.className = "pedido-btn pedido-recusar";
-            recusar.textContent = "×";
-            recusar.title = "Recusar";
-            recusar.onclick = () => recusarPedido(p.id);
-            acoes.appendChild(aceitar);
-            acoes.appendChild(recusar);
-            item.appendChild(nome);
-            item.appendChild(acoes);
-            listaPedidos.appendChild(item);
-        });
-    }
-
-    // Lista de amigos
-    const lista = document.getElementById("listaAmigos");
-    const count = document.getElementById("amigosCount");
-    if (count) count.textContent = meusAmigos.length;
-    if (lista) {
-        if (meusAmigos.length === 0) {
-            lista.innerHTML = `<div class="social-vazio">Nenhum amigo ainda.</div>`;
-        } else {
-            lista.innerHTML = "";
-            meusAmigos.forEach(a => {
-                const online = _amigoEstaOnline(a);
-                const item = document.createElement("div");
-                item.className = "amigo-item";
-
-                const nome = document.createElement("div");
-                nome.className = "nome";
-                const dot = document.createElement("span");
-                dot.className = online ? "amigo-online" : "amigo-offline";
-                nome.appendChild(dot);
-                nome.appendChild(document.createTextNode(a.username));
-
-                const acoes = document.createElement("div");
-                acoes.className = "amigo-acoes";
-
-                // Botão TP (só ativo se online)
-                const btnTp = document.createElement("button");
-                btnTp.className = "amigo-btn-tp";
-                btnTp.textContent = "TP";
-                btnTp.title = online ? `Teleportar até ${a.username}` : "Amigo offline";
-                btnTp.disabled = !online;
-                btnTp.onclick = () => tpAmigo(a.id);
-
-                // Botão PV
-                const btnPv = document.createElement("button");
-                btnPv.className = "amigo-btn-pv";
-                btnPv.textContent = "PV";
-                btnPv.title = `Conversar com ${a.username}`;
-                btnPv.onclick = () => abrirPV(a.id, a.username);
-
-                // Botão remover
-                const btnRm = document.createElement("button");
-                btnRm.className = "social-btn-acao remove";
-                btnRm.textContent = "×";
-                btnRm.title = "Remover amigo";
-                btnRm.onclick = () => removerAmigo(a.id);
-
-                acoes.appendChild(btnTp);
-                acoes.appendChild(btnPv);
-                acoes.appendChild(btnRm);
-                item.appendChild(nome);
-                item.appendChild(acoes);
-                lista.appendChild(item);
-            });
-        }
-    }
-
-    // Lista de favoritos
-    const favBox = document.getElementById("listaFavoritos");
-    if (favBox) {
-        if (meusFavoritos.length === 0) {
-            favBox.innerHTML = `<div class="social-vazio">Nenhuma sala favoritada.</div>`;
-        } else {
-            favBox.innerHTML = "";
-            meusFavoritos.forEach(room => {
-                const nomeSala = MAPAS[room]?.nome || room;
-                const item = document.createElement("div");
-                item.className = "fav-item";
-                const nome = document.createElement("div");
-                nome.className = "nome";
-                nome.textContent = `★ ${nomeSala}`;
-                const btn = document.createElement("button");
-                btn.className = "social-btn-acao remove";
-                btn.textContent = "×";
-                btn.title = "Desfavoritar";
-                btn.onclick = () => {
-                    if (ws?.readyState === WebSocket.OPEN)
-                        ws.send(JSON.stringify({ tipo: "toggle_favorito", room_id: room }));
-                };
-                item.appendChild(nome);
-                item.appendChild(btn);
-                favBox.appendChild(item);
-            });
-        }
-    }
-}
 
 // =====================================================
 //   CONEXÃO WEBSOCKET
@@ -625,17 +318,17 @@ function conectar(opts = {}) {
             // Conta logada? ativa o painel social e popula amigos/favoritos/pedidos
             if (dados.conta) {
                 contaAtiva = true;
-                meusAmigos = dados.amigos || [];
-                meusFavoritos = dados.favoritos || [];
-                meusPedidos = dados.pedidos || [];
-                amigosOnline = new Set(dados.online || []);
+                estadoSocial.amigos = dados.amigos || [];
+                estadoSocial.favoritos = dados.favoritos || [];
+                estadoSocial.pedidos = dados.pedidos || [];
+                estadoSocial.online = new Set(dados.online || []);
                 const btnSocial = document.getElementById("btnSocialToggle");
                 if (btnSocial) btnSocial.style.display = "block";
                 const btnPerfil = document.getElementById("btnPerfilToggle");
                 if (btnPerfil) btnPerfil.style.display = "block";
                 // Avisa se houver pedidos pendentes
-                if (meusPedidos.length > 0) {
-                    registrarDebug("info", `» ${meusPedidos.length} pedido(s) de amizade.`);
+                if (estadoSocial.pedidos.length > 0) {
+                    registrarDebug("info", `» ${estadoSocial.pedidos.length} pedido(s) de amizade.`);
                 }
                 registrarDebug("info", `» Logado como conta (${meuBicho.username}).`);
                 renderizarSocial();
@@ -654,16 +347,16 @@ function conectar(opts = {}) {
             });
         }
         else if (dados.tipo === "amigos") {
-            meusAmigos = dados.lista || [];
-            if (dados.online) amigosOnline = new Set(dados.online);
-            if (dados.pedidos) meusPedidos = dados.pedidos;
+            estadoSocial.amigos = dados.lista || [];
+            if (dados.online) estadoSocial.online = new Set(dados.online);
+            if (dados.pedidos) estadoSocial.pedidos = dados.pedidos;
             renderizarSocial();
         }
         else if (dados.tipo === "pedido_recebido") {
             // Alguém me mandou pedido enquanto estou online
             const de = dados.de;
-            if (de && !meusPedidos.some(p => p.id === de.id)) {
-                meusPedidos.push(de);
+            if (de && !estadoSocial.pedidos.some(p => p.id === de.id)) {
+                estadoSocial.pedidos.push(de);
             }
             appendChatMsg("sistema", [{text: `» ${de.username} quer ser seu amigo! Abra o painel ★ AMIGOS.`}]);
             registrarDebug("info", `» Pedido de amizade de ${de.username}.`);
@@ -673,7 +366,7 @@ function conectar(opts = {}) {
             _socialMsg(dados.mensagem || "Pedido enviado.", "ok");
         }
         else if (dados.tipo === "pedido_recusado") {
-            meusPedidos = meusPedidos.filter(p => p.id !== dados.from_id);
+            estadoSocial.pedidos = estadoSocial.pedidos.filter(p => p.id !== dados.from_id);
             renderizarSocial();
         }
         else if (dados.tipo === "amigo_erro") {
@@ -681,16 +374,16 @@ function conectar(opts = {}) {
         }
         else if (dados.tipo === "favorito_estado") {
             if (dados.favoritado === true) {
-                if (!meusFavoritos.includes(dados.room_id)) meusFavoritos.push(dados.room_id);
+                if (!estadoSocial.favoritos.includes(dados.room_id)) estadoSocial.favoritos.push(dados.room_id);
                 _socialMsg(`Sala favoritada!`, "ok");
             } else if (dados.favoritado === false) {
-                meusFavoritos = meusFavoritos.filter(r => r !== dados.room_id);
+                estadoSocial.favoritos = estadoSocial.favoritos.filter(r => r !== dados.room_id);
                 _socialMsg(`Sala removida dos favoritos.`, "ok");
             }
             renderizarSocial();
         }
         else if (dados.tipo === "like_estado") {
-            likesSala[dados.room_id] = {
+            estadoSocial.likes[dados.room_id] = {
                 total: dados.total || 0,
                 curtiu: dados.curtiu === true,
             };
@@ -732,7 +425,7 @@ function conectar(opts = {}) {
             _registrarPV(friendId, dados.de_nome, dados.texto, souEu);
             if (!souEu) {
                 // Notifica no chat principal se o PV não estiver aberto com ele
-                if (!pvAtual || pvAtual.id !== friendId) {
+                if (!estadoSocial.pvAtual || estadoSocial.pvAtual.id !== friendId) {
                     appendChatMsg("sistema", [{text: `✉ PV de ${dados.de_nome}: ${dados.texto}`}]);
                 }
             }
