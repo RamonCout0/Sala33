@@ -1376,6 +1376,32 @@ CONTENT_TYPES = {
 # Imagens ficam fora também porque o game.js já faz cache-bust via ?v=timestamp.
 SEM_CACHE = {".html", ".js", ".json", ".css", ".wasm"}
 
+def _parse_range(range_header, size):
+    """Interpreta um header HTTP Range. Retorna (start, end) inclusivos, ou (None, None)
+    se inválido/ausente. Suporta 'bytes=a-b', 'bytes=a-' e 'bytes=-N' (últimos N bytes)."""
+    if not range_header:
+        return None, None
+    try:
+        units, _, rng = range_header.partition("=")
+        if units.strip().lower() != "bytes":
+            return None, None
+        start_s, _, end_s = rng.strip().partition("-")
+        if start_s == "":
+            n = int(end_s)
+            if n <= 0:
+                return None, None
+            start, end = max(0, size - n), size - 1
+        else:
+            start = int(start_s)
+            end = int(end_s) if end_s else size - 1
+        end = min(end, size - 1)
+        if start < 0 or start > end:
+            return None, None
+        return start, end
+    except Exception:
+        return None, None
+
+
 def _process_request():
     async def process_request(connection, request):
         if request.headers.get("Upgrade","").lower() == "websocket":
@@ -1391,9 +1417,12 @@ def _process_request():
             body = f.read()
         ext = os.path.splitext(file_path)[1].lower()
         ct = CONTENT_TYPES.get(ext, "application/octet-stream")
+        size = len(body)
         headers = [
             ("Content-Type", ct),
-            ("Content-Length", str(len(body))),
+            # Accept-Ranges avisa o browser que dá pra fazer streaming por partes.
+            # SEM isso, áudio/vídeo grande bufferiza e trava no meio (música cortava aos ~3s).
+            ("Accept-Ranges", "bytes"),
             ("X-Content-Type-Options", "nosniff"),
             ("X-Frame-Options", "SAMEORIGIN"),
             ("Strict-Transport-Security", "max-age=31536000; includeSubDomains"),
@@ -1411,6 +1440,16 @@ def _process_request():
         ]
         if ext in SEM_CACHE:
             headers.append(("Cache-Control","no-cache, no-store, must-revalidate"))
+
+        # Range request → responde só o pedaço pedido (206), pra streaming de mídia.
+        start, end = _parse_range(request.headers.get("Range"), size)
+        if start is not None:
+            chunk = body[start:end + 1]
+            headers.append(("Content-Range", f"bytes {start}-{end}/{size}"))
+            headers.append(("Content-Length", str(len(chunk))))
+            return Response(206, "Partial Content", WsHeaders(headers), chunk)
+
+        headers.append(("Content-Length", str(size)))
         return Response(200, "OK", WsHeaders(headers), body)
     return process_request
 
@@ -1425,7 +1464,35 @@ def rodar_http_background():
             if ext in SEM_CACHE:
                 self.send_header("Cache-Control","no-cache, no-store, must-revalidate")
             self.send_header("X-Content-Type-Options","nosniff")
+            self.send_header("Accept-Ranges","bytes")
             super().end_headers()
+        def do_GET(self):
+            # Suporte a Range request (streaming de mídia). Sem isso, o SimpleHTTPRequestHandler
+            # devolve o arquivo inteiro com 200 e o áudio grande trava no meio.
+            rng = self.headers.get("Range")
+            if not rng:
+                return super().do_GET()
+            path = self.translate_path(self.path)
+            if not os.path.isfile(path):
+                return super().do_GET()
+            try:
+                size = os.path.getsize(path)
+                start, end = _parse_range(rng, size)
+                if start is None:
+                    return super().do_GET()
+                with open(path, "rb") as f:
+                    f.seek(start)
+                    chunk = f.read(end - start + 1)
+                ext = os.path.splitext(path)[1].lower()
+                self.send_response(206)
+                self.send_header("Content-Type", CONTENT_TYPES.get(ext, "application/octet-stream"))
+                self.send_header("Content-Range", f"bytes {start}-{end}/{size}")
+                self.send_header("Content-Length", str(len(chunk)))
+                self.end_headers()
+                self.wfile.write(chunk)
+            except Exception:
+                try: super().do_GET()
+                except Exception: pass
     class S(ThreadingTCPServer):
         allow_reuse_address = True; daemon_threads = True
         def handle_error(self,*a): pass
