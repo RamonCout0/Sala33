@@ -2,6 +2,7 @@
 # Ciclo: IDLE → CARREGANDO → ATAQUE → RESET → IDLE
 
 import json
+import random
 
 HANDLES = ["esquivar_raid"]
 SALA    = "raid"
@@ -27,6 +28,13 @@ def _na_zona_segura(jogador):
     z = ZONA_SEGURA
     return (z["x"] <= jogador["x"] <= z["x"] + z["w"] and
             z["y"] <= jogador["y"] <= z["y"] + z["h"])
+
+
+def _pos_fora_da_zona():
+    """Posição aleatória FORA da zona segura — espalha os atingidos pela sala
+    em vez de jogar todo mundo no mesmo ponto central."""
+    # x começa em 75 (à direita da zona segura, que vai até x≈61) → sempre fora.
+    return random.randint(75, 360), random.randint(140, 240)
 
 
 async def _broadcast(SALAS, JOGADORES, payload):
@@ -77,12 +85,12 @@ async def tick(JOGADORES, SALAS, enviar_para_sala):
             STATE["fase"]  = "ataque"
             STATE["timer"] = 0.0
 
-            sx, sy = STATE["spawn"]["x"], STATE["spawn"]["y"]
             for ws in list(SALAS.get(SALA, set())):
                 if ws not in JOGADORES:
                     continue
                 j = JOGADORES[ws]
                 if ws not in STATE["esquivaram"] and not _na_zona_segura(j):
+                    sx, sy = _pos_fora_da_zona()   # cada atingido vai pra um lugar diferente
                     j["x"] = sx
                     j["y"] = sy
                     # Avisa o PRÓPRIO jogador: o cliente ignora 'movimento' do seu sid,

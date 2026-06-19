@@ -40,8 +40,10 @@ SALA33_REGISTRAR("raid", {
         const defs = salaConfig.extras?.sprites || {};
         for (const [fase, path] of Object.entries(defs)) {
             const img = new Image();
-            img.onerror = () => { img._erro = true; };  // só marca se REALMENTE falhar
-            img.src = path;
+            img.onerror = () => { img._erro = true; };
+            // Caminho absoluto: garante que resolve a partir da raiz (publicDir),
+            // independente da URL atual. Caminho relativo podia falhar.
+            img.src = (path.startsWith("http") || path.startsWith("/")) ? path : "/" + path;
             this._sprites[fase] = img;
         }
     },
@@ -315,9 +317,9 @@ SALA33_REGISTRAR("raid", {
                 ctx.drawImage(img, bx - w / 2, by, w, h);
                 ctx.restore();
             }
-        } else if (img?._erro) {
-            // Só usa o dragão procedural se o PNG REALMENTE falhou — não enquanto carrega
-            // (senão ele pisca como um "placeholder" nos primeiros frames).
+        } else {
+            // Fallback: dragão procedural enquanto o PNG carrega OU se falhar.
+            // (Com o caminho absoluto, o PNG carrega rápido e isso quase não aparece.)
             this._desenharDragaoProcedural(ctx, bx, by, fase, prog);
         }
     },
