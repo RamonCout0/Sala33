@@ -1369,6 +1369,7 @@ CONTENT_TYPES = {
     ".webm":"video/webm", ".mp3":"audio/mpeg", ".ogg":"audio/ogg",
     ".ico":"image/x-icon", ".wasm":"application/wasm", ".txt":"text/plain",
     ".svg":"image/svg+xml", ".webp":"image/webp",
+    ".webmanifest":"application/manifest+json",
 }
 # SEM CACHE: só código e config (mudam toda hora durante dev).
 # Mídia (mp3/ogg/mp4/webm) PRECISA ser cacheada — sem isso o browser
