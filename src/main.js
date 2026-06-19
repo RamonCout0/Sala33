@@ -8,6 +8,8 @@ import { MAPAS, PATHS_SPRITES, AUDIO_PATHS } from "./world/config.js";
 import { precarregarAudios, tocarMusica, ajustarVolume } from "./audio/audio.js";
 import { initParticles, spawnFumaca, atualizarFumacas, desenharFumacas } from "./render/particles.js";
 import { inicializarPainelEmojis, appendChatMsg, atualizarPreviewSkin, traduzirEmotes, horaAtualBrasil, _aplicarGrayscaleEmojis } from "./ui/chat.js";
+import { setSocket } from "./net/socket.js";
+import { initPerfil, _perfilMsg } from "./ui/perfil.js";
 
 // ----- Sistema de plugins de lógica por sala -----
 window.SALA33_LOGICAS = {};
@@ -362,6 +364,9 @@ let meusPedidos = [];              // pedidos recebidos [{id, username, sprite_i
 let amigosOnline = new Set();      // ids de amigos online agora
 let likesSala = {};                // { room_id: {total, curtiu} }
 
+// Injeta no módulo de perfil o jogador e um getter da bio atual
+initPerfil({ meuBicho, getBio: () => meuBio });
+
 // Estado do chat privado
 let pvAtual = null;                // {id, username} do amigo com quem converso
 const pvHistorico = {};            // { friendId: [ {de, texto, ts, eu} ] }
@@ -443,110 +448,9 @@ function toggleLikeSalaAtual() {
 }
 window.toggleLikeSalaAtual = toggleLikeSalaAtual;
 
-// =====================================================
-//   PAINEL DE PERFIL
-// =====================================================
-let _perfilAberto = false;
-
-function _perfilMsg(texto, tipo) {
-    const el = document.getElementById("perfilMsg");
-    if (!el) return;
-    el.textContent = texto;
-    el.className = tipo || "";
-    if (texto) setTimeout(() => { if (el.textContent === texto) { el.textContent = ""; el.className = ""; } }, 4000);
-}
-
-function _popularSpritesPerfil() {
-    const sel = document.getElementById("perfilSpriteSelect");
-    if (!sel || sel.options.length > 0) return;
-    // Reutiliza PATHS_SPRITES carregados na inicialização
-    for (const [id, path] of Object.entries(PATHS_SPRITES)) {
-        const opt = document.createElement("option");
-        opt.value = id;
-        // Tenta buscar o nome do select principal do menu
-        const mainOpt = document.querySelector(`#spriteSelect option[value="${id}"]`);
-        opt.textContent = mainOpt ? mainOpt.textContent : id.toUpperCase();
-        sel.appendChild(opt);
-    }
-    sel.value = meuBicho.spriteId || "cinzaguy";
-    sel.addEventListener("change", _atualizarPreviewPerfil);
-    _atualizarPreviewPerfil();
-}
-
-function _atualizarPreviewPerfil() {
-    const sel = document.getElementById("perfilSpriteSelect");
-    const img = document.getElementById("perfilSpritePreview");
-    const fb  = document.getElementById("perfilFallback");
-    if (!sel || !img) return;
-    const path = PATHS_SPRITES[sel.value];
-    if (path) {
-        img.src = path;
-        img.style.display = "block";
-        if (fb) fb.style.display = "none";
-    } else {
-        img.style.display = "none";
-        if (fb) fb.style.display = "block";
-    }
-}
-
-function togglePerfil() {
-    const overlay = document.getElementById("perfilOverlay");
-    const painel  = document.getElementById("perfilPanel");
-    if (!painel) return;
-    _perfilAberto = !_perfilAberto;
-    if (_perfilAberto) {
-        // Popula campos com dados atuais
-        const nomeEl = document.getElementById("perfilUsername");
-        if (nomeEl) nomeEl.textContent = meuBicho.username || "";
-        const bioEl = document.getElementById("perfilBio");
-        if (bioEl) bioEl.value = meuBio || "";
-        _popularSpritesPerfil();
-        // Sincroniza sprite selecionado com o atual
-        const sel = document.getElementById("perfilSpriteSelect");
-        if (sel) { sel.value = meuBicho.spriteId || "cinzaguy"; _atualizarPreviewPerfil(); }
-        // Limpa campos de senha
-        ["perfilSenhaAtual","perfilNovaSenha","perfilConfirmarSenha"].forEach(id => {
-            const el = document.getElementById(id);
-            if (el) el.value = "";
-        });
-        _perfilMsg("", "");
-        if (overlay) overlay.style.display = "block";
-        painel.style.display = "block";
-    } else {
-        if (overlay) overlay.style.display = "none";
-        painel.style.display = "none";
-    }
-}
-window.togglePerfil = togglePerfil;
-
-function fecharPerfilOverlay(e) {
-    if (e.target === document.getElementById("perfilOverlay")) togglePerfil();
-}
-window.fecharPerfilOverlay = fecharPerfilOverlay;
-
-function salvarPerfil() {
-    if (!ws || ws.readyState !== WebSocket.OPEN) return _perfilMsg("Sem conexão.", "erro");
-    const sprite = document.getElementById("perfilSpriteSelect")?.value;
-    const bio    = document.getElementById("perfilBio")?.value || "";
-    const btn    = document.getElementById("btnSalvarPerfil");
-    if (btn) { btn.disabled = true; btn.textContent = "SALVANDO..."; }
-    ws.send(JSON.stringify({ tipo: "atualizar_perfil", sprite_id: sprite, bio: bio.trim() }));
-}
-window.salvarPerfil = salvarPerfil;
-
-function trocarSenhaPerfil() {
-    if (!ws || ws.readyState !== WebSocket.OPEN) return _perfilMsg("Sem conexão.", "erro");
-    const senhaAtual   = document.getElementById("perfilSenhaAtual")?.value || "";
-    const novaSenha    = document.getElementById("perfilNovaSenha")?.value || "";
-    const confirmar    = document.getElementById("perfilConfirmarSenha")?.value || "";
-    if (!senhaAtual) return _perfilMsg("Digite a senha atual.", "erro");
-    if (novaSenha.length < 6) return _perfilMsg("Nova senha precisa de 6+ caracteres.", "erro");
-    if (novaSenha !== confirmar) return _perfilMsg("As senhas não coincidem.", "erro");
-    const btn = document.getElementById("btnTrocarSenha");
-    if (btn) { btn.disabled = true; btn.textContent = "ALTERANDO..."; }
-    ws.send(JSON.stringify({ tipo: "trocar_senha", senha_atual: senhaAtual, nova_senha: novaSenha }));
-}
-window.trocarSenhaPerfil = trocarSenhaPerfil;
+// Painel de perfil (togglePerfil / salvarPerfil / trocarSenhaPerfil / _perfilMsg)
+// vive em ui/perfil.js. As respostas (perfil_ok/senha_ok) são tratadas no loop de
+// mensagens abaixo, que chama _perfilMsg importado.
 
 // Pede ao servidor o estado de likes da sala atual (total + se eu curti)
 function pedirEstadoSala() {
@@ -822,6 +726,7 @@ function conectar(opts = {}) {
     tocarMusica(SALA_INICIAL);
 
     ws = new WebSocket(_wsUrl());
+    setSocket(ws);   // registra o socket no módulo net pra os módulos de UI usarem enviar()
 
     ws.onopen = () => {
         const payloadLogin = token
