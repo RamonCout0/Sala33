@@ -8,8 +8,9 @@ import { MAPAS, PATHS_SPRITES, AUDIO_PATHS } from "./world/config.js";
 import { precarregarAudios, tocarMusica, ajustarVolume } from "./audio/audio.js";
 import { initParticles, spawnFumaca, atualizarFumacas, desenharFumacas } from "./render/particles.js";
 import { inicializarPainelEmojis, appendChatMsg, atualizarPreviewSkin, traduzirEmotes, horaAtualBrasil, _aplicarGrayscaleEmojis } from "./ui/chat.js";
-import { setSocket } from "./net/socket.js";
+import { setSocket, _wsUrl } from "./net/socket.js";
 import { initPerfil, _perfilMsg } from "./ui/perfil.js";
+import { initAuth, _authMsg } from "./ui/auth.js";
 
 // ----- Sistema de plugins de lógica por sala -----
 window.SALA33_LOGICAS = {};
@@ -183,174 +184,9 @@ function enviarEmote(emote) {
 }
 window.enviarEmote = enviarEmote;
 
-// =====================================================
-//   AUTENTICAÇÃO / CONTAS
-//   Abas no menu: convidado | entrar | criar conta.
-//   Auth acontece via WebSocket (registrar / autenticar).
-// =====================================================
-let modoAuth = "convidado";          // convidado | entrar | criar | esqueci
-let tokenConta = null;               // JWT salvo após login/registro
-let wsAuth = null;                   // socket temporário só pra auth
-
-function _authMsg(texto, tipo) {
-    const el = document.getElementById("authMsg");
-    if (!el) return;
-    el.textContent = texto;
-    el.className = tipo || "";
-    if (!texto) el.className = "";
-}
-
-function trocarAba(modo) {
-    modoAuth = modo;
-    _authMsg("", "");
-    document.querySelectorAll(".auth-tab").forEach(t => {
-        t.classList.toggle("ativa", t.dataset.modo === modo);
-    });
-    const contaFields = document.getElementById("contaFields");
-    const guestField  = document.getElementById("username");
-    const seletorSkin = document.querySelector(".selector-container");
-    const emailField  = document.getElementById("contaEmail");
-    const linkEsqueci = document.getElementById("linkEsqueciSenha");
-    const resetFields = document.getElementById("resetFields");
-    const btn         = document.getElementById("btnEntrar");
-
-    contaFields.style.display = "none";
-    guestField.style.display  = "none";
-    if (seletorSkin) seletorSkin.style.display = "none";
-    if (emailField)  emailField.style.display  = "none";
-    if (linkEsqueci) linkEsqueci.style.display = "none";
-    if (resetFields) resetFields.style.display = "none";
-
-    if (modo === "convidado") {
-        guestField.style.display = "block";
-        if (seletorSkin) seletorSkin.style.display = "flex";
-        btn.textContent = "ENTRAR";
-    } else if (modo === "entrar") {
-        contaFields.style.display = "block";
-        if (linkEsqueci) linkEsqueci.style.display = "block";
-        btn.textContent = "ENTRAR COM CONTA";
-    } else if (modo === "criar") {
-        contaFields.style.display = "block";
-        if (emailField) emailField.style.display = "block";
-        if (seletorSkin) seletorSkin.style.display = "flex";
-        btn.textContent = "CRIAR E ENTRAR";
-    } else if (modo === "esqueci") {
-        if (resetFields) resetFields.style.display = "block";
-        btn.textContent = "ENVIAR RECUPERAÇÃO";
-    }
-}
-window.trocarAba = trocarAba;
-
-// URL do WebSocket (mesma lógica usada no jogo)
-function _wsUrl() {
-    const proto = location.protocol === "https:" ? "wss:" : "ws:";
-    const isLocal = location.hostname === "localhost" || location.hostname === "127.0.0.1"
-        || location.hostname.startsWith("192.168.") || location.hostname.startsWith("10.");
-    return isLocal ? `ws://${location.hostname}:8080` : `${proto}//${location.host}`;
-}
-
-// Roteador do botão ENTRAR conforme a aba ativa
-function acaoMenu() {
-    if (modoAuth === "convidado") {
-        conectar();
-    } else if (modoAuth === "entrar" || modoAuth === "criar") {
-        autenticarOuCriar(modoAuth === "criar" ? "registrar" : "autenticar");
-    } else if (modoAuth === "esqueci") {
-        solicitarReset();
-    }
-}
-window.acaoMenu = acaoMenu;
-
-// Abre um socket dedicado de auth e manda uma mensagem, tratando a resposta.
-// cb(dados) decide o que fazer com cada resposta.
-function _authSocket(payload, onResp) {
-    const sock = new WebSocket(_wsUrl());
-    sock.onopen = () => sock.send(JSON.stringify(payload));
-    sock.onmessage = (event) => {
-        let dados;
-        try { dados = JSON.parse(event.data); } catch { return; }
-        onResp(dados, sock);
-    };
-    sock.onerror = () => onResp({ tipo: "_erro_conexao" }, sock);
-    return sock;
-}
-
-// Solicita recuperação de senha (resposta sempre neutra)
-function solicitarReset() {
-    const username = document.getElementById("resetUser").value.trim().toUpperCase();
-    if (username.length < 3) return _authMsg("Digite seu usuário.", "erro");
-    const btn = document.getElementById("btnEntrar");
-    btn.disabled = true; btn.textContent = "ENVIANDO...";
-    _authSocket({ tipo: "solicitar_reset", username }, (dados, sock) => {
-        if (dados.tipo === "reset_solicitado") {
-            _authMsg(dados.mensagem || "Se a conta existir, enviamos instruções.", "ok");
-            sock.close();
-            btn.disabled = false; btn.textContent = "ENVIAR RECUPERAÇÃO";
-        } else if (dados.tipo === "_erro_conexao") {
-            _authMsg("Erro de conexão.", "erro");
-            btn.disabled = false; btn.textContent = "ENVIAR RECUPERAÇÃO";
-        }
-    });
-}
-window.solicitarReset = solicitarReset;
-
-// Faz registro OU login via WebSocket dedicado, salva token e entra no jogo
-function autenticarOuCriar(tipo) {
-    const username = document.getElementById("contaUser").value.trim().toUpperCase();
-    const password = document.getElementById("contaPass").value;
-    const email = (document.getElementById("contaEmail")?.value || "").trim();
-    if (username.length < 3) return _authMsg("Usuário precisa de 3+ caracteres.", "erro");
-    if (password.length < 6) return _authMsg("Senha precisa de 6+ caracteres.", "erro");
-    if (!Object.keys(MAPAS).length) return _authMsg("Configs carregando, aguarde...", "erro");
-
-    const btn = document.getElementById("btnEntrar");
-    btn.disabled = true;
-    btn.textContent = tipo === "registrar" ? "CRIANDO..." : "ENTRANDO...";
-    _authMsg("", "");
-
-    // Payload: inclui email só no registro (e só se preenchido)
-    const payload = { tipo, username, password };
-    if (tipo === "registrar" && email) payload.email = email;
-
-    // Abre um socket dedicado só pra auth
-    wsAuth = new WebSocket(_wsUrl());
-
-    wsAuth.onopen = () => {
-        wsAuth.send(JSON.stringify(payload));
-    };
-
-    wsAuth.onmessage = (event) => {
-        let dados;
-        try { dados = JSON.parse(event.data); } catch { return; }
-
-        if (dados.tipo === "auth_ok") {
-            tokenConta = dados.token;
-            localStorage.setItem("sala33_token", tokenConta);
-            meuBicho.username = dados.user.username;
-            meuBicho.spriteId = dados.user.sprite_id || "cinzaguy";
-            meuBicho.isDev = !!dados.user.isDev;  // <-- ADICIONADO: recebe flag isDev do servidor
-            meuUserId = dados.user.id;
-            meuBio = dados.user.bio || "";
-            wsAuth.close(); wsAuth = null;
-            btn.disabled = false;
-            // Entra no jogo usando o token
-            conectar({ token: tokenConta });
-        }
-        else if (dados.tipo === "auth_erro") {
-            _authMsg(dados.mensagem || "Falha na autenticação.", "erro");
-            wsAuth.close(); wsAuth = null;
-            btn.disabled = false;
-            btn.textContent = tipo === "registrar" ? "CRIAR E ENTRAR" : "ENTRAR COM CONTA";
-        }
-    };
-
-    wsAuth.onerror = () => {
-        _authMsg("Erro de conexão com o servidor.", "erro");
-        btn.disabled = false;
-        btn.textContent = tipo === "registrar" ? "CRIAR E ENTRAR" : "ENTRAR COM CONTA";
-    };
-}
-window.autenticarOuCriar = autenticarOuCriar;
+// Autenticação (abas, login/registro/reset) vive em ui/auth.js.
+// O main.js injeta os callbacks de "entrar" via initAuth (logo abaixo, após
+// as declarações de estado de conta).
 
 // =====================================================
 //   PAINEL SOCIAL (amigos + favoritos + pedidos + PV)
@@ -366,6 +202,20 @@ let likesSala = {};                // { room_id: {total, curtiu} }
 
 // Injeta no módulo de perfil o jogador e um getter da bio atual
 initPerfil({ meuBicho, getBio: () => meuBio });
+
+// Injeta no módulo de auth como entrar no jogo (convidado ou com conta)
+initAuth({
+    conectarConvidado: () => conectar(),
+    aoEntrarComConta: (user, token) => {
+        localStorage.setItem("sala33_token", token);
+        meuBicho.username = user.username;
+        meuBicho.spriteId = user.sprite_id || "cinzaguy";
+        meuBicho.isDev    = !!user.isDev;
+        meuUserId = user.id;
+        meuBio    = user.bio || "";
+        conectar({ token });   // entra no jogo usando o token
+    },
+});
 
 // Estado do chat privado
 let pvAtual = null;                // {id, username} do amigo com quem converso
