@@ -6,6 +6,7 @@
 import { Wasm } from "./core/wasm.js";
 import { MAPAS, PATHS_SPRITES, AUDIO_PATHS } from "./world/config.js";
 import { precarregarAudios, tocarMusica, ajustarVolume } from "./audio/audio.js";
+import { initParticles, spawnFumaca, atualizarFumacas, desenharFumacas } from "./render/particles.js";
 
 // ----- Sistema de plugins de lógica por sala -----
 window.SALA33_LOGICAS = {};
@@ -19,6 +20,7 @@ function getLogica() { return window.SALA33_LOGICAS[minhaSala] || null; }
 // =====================================================
 const canvas = document.getElementById("gameCanvas");
 const ctx = canvas.getContext("2d");
+initParticles(ctx);   // injeta o ctx no módulo de partículas
 let ws;
 
 let minhaSala = "";
@@ -708,56 +710,7 @@ function animarTeleporte() {
     }
 }
 
-// ---------- PARTÍCULAS DE FUMAÇA (efeito de chegada por TP) ----------
-// Renderizadas no canvas. Cada nuvem é uma lista de partículas cinza
-// que sobem, expandem e somem — estilo "puff" de teleporte.
-let fumacas = [];   // [{x, y, vx, vy, vida, vidaMax, tam}]
-
-function spawnFumaca(cx, cy) {
-    // cx, cy = centro do jogador que chegou
-    const N = 14;
-    for (let i = 0; i < N; i++) {
-        const ang = (Math.PI * 2 * i) / N + Math.random() * 0.5;
-        const vel = 0.3 + Math.random() * 0.8;
-        fumacas.push({
-            x: cx + (Math.random() - 0.5) * 10,
-            y: cy + (Math.random() - 0.5) * 10,
-            vx: Math.cos(ang) * vel,
-            vy: Math.sin(ang) * vel - 0.4,   // tendência a subir
-            vida: 1.0,
-            vidaMax: 1.0,
-            decay: 0.012 + Math.random() * 0.012,
-            tam: 5 + Math.random() * 7,
-        });
-    }
-    if (fumacas.length > 200) fumacas = fumacas.slice(-200);   // teto de segurança
-}
-
-function atualizarFumacas() {
-    for (const f of fumacas) {
-        f.x += f.vx;
-        f.y += f.vy;
-        f.vy += 0.005;           // leve gravidade que desacelera a subida
-        f.vx *= 0.96;            // arrasto
-        f.tam += 0.35;           // expande
-        f.vida -= f.decay;
-    }
-    fumacas = fumacas.filter(f => f.vida > 0);
-}
-
-function desenharFumacas() {
-    if (!fumacas.length) return;
-    ctx.save();
-    for (const f of fumacas) {
-        const alpha = Math.max(0, f.vida) * 0.5;
-        const tom = 150 + Math.floor((1 - f.vida) * 60);   // clareia ao sumir
-        ctx.fillStyle = `rgba(${tom},${tom},${tom},${alpha})`;
-        ctx.beginPath();
-        ctx.arc(f.x, f.y, f.tam, 0, Math.PI * 2);
-        ctx.fill();
-    }
-    ctx.restore();
-}
+// Partículas de fumaça (spawnFumaca / atualizarFumacas / desenharFumacas) vivem em render/particles.js
 
 // Amigo online: ou está na lista de amigosOnline (servidor) ou na minha sala
 function _amigoEstaOnline(amigo) {
@@ -1148,6 +1101,7 @@ function conectar(opts = {}) {
             tocarMusica(minhaSala);
             getLogica()?.onEnter?.(MAPAS[minhaSala]);
             animarTeleporte();      // flash + label "TELEPORTADO"
+            spawnFumaca(meuBicho.x + meuBicho.tamanho / 2, meuBicho.y + meuBicho.tamanho / 2);
             pedirEstadoSala();      // atualiza likes da nova sala
             renderizarSocial();     // atualiza botões de fav/like pra nova sala
             _socialMsg("Teleportado!", "ok");
@@ -1510,6 +1464,8 @@ function processarTransicao() {
             transicaoAlpha = 0;
             estadoTransicao = "idle";
             portaPendente = null;
+            // Puff de chegada no próprio teleporte (tela já limpa do fade)
+            spawnFumaca(meuBicho.x + meuBicho.tamanho / 2, meuBicho.y + meuBicho.tamanho / 2);
         }
     }
 }
