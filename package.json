@@ -4,6 +4,9 @@
   "description": "SALA 33 — MMO de chat de salas 2D (backrooms). Frontend Canvas 2D + Vite.",
   "type": "module",
   "private": true,
+  "engines": {
+    "node": ">=20"
+  },
   "scripts": {
     "dev": "vite",
     "build": "vite build",
