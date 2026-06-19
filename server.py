@@ -821,7 +821,7 @@ class _JogProxy:
     def values(self): return [_SessProxy(s) for s in self._hub._sessions.values()]
 
 class _SessProxy:
-    _MAP = {"username":"username","sala":"sala","x":"x","y":"y",
+    _MAP = {"sid":"sid","id":"sid","username":"username","sala":"sala","x":"x","y":"y",
             "spriteId":"sprite_id","lado":"lado","logado":"logado"}
     def __init__(self, s): self._s = s
     def __getitem__(self, k):
