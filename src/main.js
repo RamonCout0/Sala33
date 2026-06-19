@@ -542,13 +542,18 @@ canvas.addEventListener("mousemove", (e) => {
 });
 
 window.addEventListener("keydown", (e) => {
-    // Enter pra focar no chat quando não está digitando
-    if (e.code === "Enter" && document.activeElement !== chatInput) {
+    // Está digitando em algum campo de texto? (chat, PV, adicionar amigo, perfil…)
+    const ae = document.activeElement;
+    const digitando = ae && (ae.tagName === "INPUT" || ae.tagName === "TEXTAREA");
+
+    // Enter foca o chat — só quando NÃO estou digitando em nenhum campo
+    if (e.code === "Enter" && !digitando) {
         e.preventDefault();
         chatInput.focus();
         return;
     }
-    if (document.activeElement === chatInput) return;
+    // Digitando? não captura teclas de jogo (senão WASD anda o boneco enquanto escreve)
+    if (digitando) return;
     teclas[e.code] = true;
 
     // Hotkeys globais
