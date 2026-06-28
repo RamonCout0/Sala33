@@ -778,8 +778,7 @@ function processarTransicao() {
             transicaoAlpha = 0;
             estadoTransicao = "idle";
             portaPendente = null;
-            // Puff de chegada no próprio teleporte (tela já limpa do fade)
-            spawnFumaca(meuBicho.x + meuBicho.tamanho / 2, meuBicho.y + meuBicho.tamanho / 2);
+            // (sem fumaça ao trocar de sala por porta — só no TP pra amigo)
         }
     }
 }

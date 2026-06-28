@@ -10,7 +10,7 @@
   },
   "portas": [
     { "destino": "the_hub", "x": 380, "y": 130, "w": 20, "h": 40, "spawnX": 45, "spawnY": 225 },
-    { "destino": "xadrez", "x": 5, "y": 120, "w": 18, "h": 45, "spawnX": 110, "spawnY": 70 }
+    { "destino": "xadrez", "x": 44, "y": 120, "w": 5, "h": 5, "spawnX": 110, "spawnY": 70 }
   ],
   "extras": {
     "_comentario": "Configurações específicas da sala. A lógica do minigame está em mods/logicas/sala_jogos.js (cliente) e server_mods/sala_jogos.py (servidor).",
