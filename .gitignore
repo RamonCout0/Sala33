@@ -9,6 +9,9 @@ __pycache__/
 .venv/
 venv/
 
+# Dados de runtime dos mods (ranking do xadrez, etc.)
+server_mods/xadrez_ranking.json
+
 # Env
 .env
 .env.*

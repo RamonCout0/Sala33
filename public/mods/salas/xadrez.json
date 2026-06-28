@@ -1,0 +1,14 @@
+{
+  "id": "xadrez",
+  "nome": "SALA DE XADREZ",
+  "corFundo": "#10131a",
+  "imagem": "assets/maps/xadrez.png",
+  "musica": "assets/music/musica_jogos.mp3",
+  "portas": [
+    { "destino": "sala_jogos", "x": 182, "y": 268, "w": 40, "h": 28, "spawnX": 40, "spawnY": 150 }
+  ],
+  "extras": {
+    "_comentario": "tabuleiro = hitbox onde o jogador aperta [E] pra abrir o lobby de xadrez. AJUSTE x/y/w/h aqui (o engine desenha o hitbox marcado em ciano na sala). Lógica em mods/logicas/xadrez.js (cliente) e server_mods/xadrez.py (servidor).",
+    "tabuleiro": { "x": 150, "y": 95, "w": 100, "h": 80 }
+  }
+}
