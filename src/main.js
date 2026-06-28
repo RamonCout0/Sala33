@@ -929,6 +929,14 @@ function desenhar() {
         ctx.fillRect(0, 0, canvas.width, canvas.height);
     }
 
+    // Fundo customizado da sala (ex.: vídeo animado) — desenhado ANTES dos
+    // jogadores, então fica ATRÁS deles. Use render() pra overlays por cima.
+    try {
+        getLogica()?.renderFundo?.(ctx);
+    } catch (e) {
+        console.error(`[renderFundo:${minhaSala}]`, e);
+    }
+
     ctx.font = "10px monospace"; ctx.textAlign = "center";
 
     // Outros jogadores

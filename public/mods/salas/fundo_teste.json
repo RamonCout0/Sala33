@@ -1,0 +1,9 @@
+{
+  "id": "fundo_teste",
+  "nome": "TESTE — FUNDO ANIMADO",
+  "corFundo": "#0c0c0c",
+  "imagem": "assets/maps/fundo_teste.webm",
+  "portas": [
+    { "destino": "the_hub", "x": 5, "y": 128, "w": 18, "h": 46, "spawnX": 200, "spawnY": 150 }
+  ]
+}
