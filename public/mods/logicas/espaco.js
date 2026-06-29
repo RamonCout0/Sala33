@@ -22,6 +22,7 @@ precision highp float;
 uniform vec2  u_res;
 uniform float u_time;
 uniform float u_zoom;
+uniform vec2  u_pan;
 float hash(vec2 p){ p=fract(p*vec2(123.34,456.21)); p+=dot(p,p+45.32); return fract(p.x*p.y); }
 float noise(vec2 p){
   vec2 i=floor(p), f=fract(p);
@@ -37,6 +38,7 @@ float fbm(vec2 p){
 void main(){
   vec2 p=(gl_FragCoord.xy-0.5*u_res)/u_res.y;
   p/=u_zoom;
+  p+=u_pan;                                   // mira da luneta (setas)
   p+=vec2(u_time*0.012, u_time*0.006);
   // nebulosa
   float n =fbm(p*2.5+vec2(0.0,u_time*0.02));
@@ -66,9 +68,10 @@ SALA33_REGISTRAR("espaco", {
     _modo: "fora",                 // "fora" | "luneta"
     _luneta: { x: 300, y: 150, w: 50, h: 60 },
     _gl: null, _prog: null, _glCanvas: null, _glOk: false,
-    _uRes: null, _uTime: null, _uZoom: null,
+    _uRes: null, _uTime: null, _uZoom: null, _uPan: null,
     _t0: 0,
     _art: null,                    // imagem desenhada mostrada DENTRO da lente
+    _panX: 0, _panY: 0,            // mira da luneta (deslocamento, em px da lente)
 
     onEnter(salaConfig) {
         if (salaConfig?.extras?.luneta) this._luneta = salaConfig.extras.luneta;
@@ -94,15 +97,22 @@ SALA33_REGISTRAR("espaco", {
 
     onTeclaDown(code, ws, meuBicho) {
         if (this._modo === "fora") {
-            if (code === "KeyE" && this._perto(meuBicho)) { this._modo = "luneta"; return true; }
+            if (code === "KeyE" && this._perto(meuBicho)) { this._modo = "luneta"; this._panX = this._panY = 0; return true; }
             return false;
         }
         // modo luneta
         if (code === "KeyQ" || code === "KeyE") { this._modo = "fora"; return true; }
-        return true;   // consome o resto enquanto olha pela luneta
+        return true;   // consome o resto (a mira é tratada em onFisica)
     },
 
-    onFisica() {
+    onFisica(meuBicho, ws, teclas) {
+        if (this._modo === "luneta" && teclas) {
+            const v = 2.4;   // velocidade da mira
+            if (teclas["ArrowLeft"]  || teclas["KeyA"]) this._panX -= v;
+            if (teclas["ArrowRight"] || teclas["KeyD"]) this._panX += v;
+            if (teclas["ArrowUp"]    || teclas["KeyW"]) this._panY -= v;
+            if (teclas["ArrowDown"]  || teclas["KeyS"]) this._panY += v;
+        }
         return { bloqueiaMovimento: this._modo === "luneta", tremor: 0 };
     },
 
@@ -170,9 +180,10 @@ SALA33_REGISTRAR("espaco", {
         ctx.beginPath(); ctx.arc(cx, cy, r, 0, Math.PI * 2); ctx.clip();
         // 1) o shader (fundo, ampliado)
         this._desenharEspaco(ctx, cx - r, cy - r, r * 2, r * 2, 2.2, true);
-        // 2) a SUA imagem desenhada, por cima do shader (partes transparentes = espaço aparece)
+        // 2) a SUA imagem desenhada, por cima do shader (transparência = espaço aparece),
+        //    deslocada junto com a mira (panX/panY)
         if (this._art && this._art.complete && this._art.naturalWidth) {
-            ctx.drawImage(this._art, cx - r, cy - r, r * 2, r * 2);
+            ctx.drawImage(this._art, cx - r + this._panX, cy - r + this._panY, r * 2, r * 2);
         }
         ctx.restore();
 
@@ -191,7 +202,7 @@ SALA33_REGISTRAR("espaco", {
         ctx.fillStyle = "#9ad7ff"; ctx.font = "9px monospace"; ctx.textAlign = "center";
         ctx.fillText("LUNETA — observando o espaço", cx, cy + r + 24);
         ctx.fillStyle = "#667"; ctx.font = "7px monospace";
-        ctx.fillText("[Q] fechar", cx, cy + r + 36);
+        ctx.fillText("[setas] mirar     [Q] fechar", cx, cy + r + 36);
     },
 
     // Desenha o espaço (GLSL se houver; senão fallback 2D) num retângulo.
@@ -233,6 +244,7 @@ SALA33_REGISTRAR("espaco", {
             this._uRes = gl.getUniformLocation(prog, "u_res");
             this._uTime = gl.getUniformLocation(prog, "u_time");
             this._uZoom = gl.getUniformLocation(prog, "u_zoom");
+            this._uPan = gl.getUniformLocation(prog, "u_pan");
             this._glOk = true;
         } catch (e) {
             console.warn("[espaco] WebGL indisponível, usando fallback 2D:", e);
@@ -265,6 +277,10 @@ SALA33_REGISTRAR("espaco", {
         gl.uniform2f(this._uRes, this._glCanvas.width, this._glCanvas.height);
         gl.uniform1f(this._uTime, (performance.now() - this._t0) / 1000);
         gl.uniform1f(this._uZoom, zoom);
+        // converte a mira (px da lente) p/ as unidades do shader. A lente tem
+        // 190px (2*r) e cobre 1/zoom em p; sinais alinham com o pan da imagem.
+        const f = (1.0 / zoom) / 190.0;
+        gl.uniform2f(this._uPan, -this._panX * f, this._panY * f);
         gl.drawArrays(gl.TRIANGLES, 0, 3);
     },
 
