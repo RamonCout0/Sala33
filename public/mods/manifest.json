@@ -14,12 +14,14 @@
     "sonhos_2",
     "sonhos_3",
     "xadrez",
-    "fundo_teste"
+    "fundo_teste",
+    "espaco"
   ],
   "logicas": [
     "sala_jogos",
     "xadrez",
     "fundo_teste",
+    "espaco",
     "museu",
     "o_quarto",
     "televisao",

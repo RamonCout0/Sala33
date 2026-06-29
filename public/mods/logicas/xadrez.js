@@ -12,8 +12,8 @@
 //   FASE 2: regras completas (xeque/xeque-mate/afogamento, roque,
 //   en passant, promoção com escolha, empates), lobby, timer (5/10/30),
 //   relógios e ranking Elo.
-//   O hitbox do tabuleiro é DESENHADO MARCADO (ciano tracejado) pra
-//   você ajustar em public/mods/salas/xadrez.json -> extras.tabuleiro.
+//   O hitbox do tabuleiro (onde aparece o prompt [E]) fica em
+//   public/mods/salas/xadrez.json -> extras.tabuleiro.
 
 const GLIFOS = { p: "♟", n: "♞", b: "♝", r: "♜", q: "♛", k: "♚" };
 const TIMERS = [5, 10, 30];
@@ -214,7 +214,7 @@ SALA33_REGISTRAR("xadrez", {
     },
 
     render(ctx, meuBicho, outrosJogadores, imagensSprites, tamSprite) {
-        if (this._modo === "fora") { this._renderHitbox(ctx, meuBicho, tamSprite); return; }
+        if (this._modo === "fora") { this._renderPrompt(ctx, meuBicho); return; }
         if (this._modo === "lobby") { this._renderLobby(ctx); return; }
         if (this._modo === "jogo") { this._renderJogo(ctx); return; }
     },
@@ -233,21 +233,15 @@ SALA33_REGISTRAR("xadrez", {
         return cx > h.x - m && cx < h.x + h.w + m && cy > h.y - m && cy < h.y + h.h + m;
     },
 
-    _renderHitbox(ctx, meuBicho, tamSprite) {
+    _renderPrompt(ctx, meuBicho) {
+        if (!this._perto(meuBicho)) return;
         const h = this._hit;
+        const lx = h.x + h.w / 2;
         ctx.save();
-        ctx.strokeStyle = "#00e0ff"; ctx.lineWidth = 1; ctx.setLineDash([4, 3]);
-        ctx.strokeRect(h.x, h.y, h.w, h.h);
-        ctx.setLineDash([]);
-        ctx.fillStyle = "#00e0ff"; ctx.font = "7px monospace"; ctx.textAlign = "left";
-        ctx.fillText(`hitbox xadrez ${h.x},${h.y},${h.w},${h.h}`, h.x, h.y - 3);
-        if (this._perto(meuBicho)) {
-            const lx = h.x + h.w / 2;
-            ctx.fillStyle = "#161616"; ctx.fillRect(lx - 42, h.y - 24, 84, 14);
-            ctx.strokeStyle = "#FFFFFF"; ctx.lineWidth = 1; ctx.strokeRect(lx - 42, h.y - 24, 84, 14);
-            ctx.fillStyle = "#00ffcc"; ctx.font = "8px monospace"; ctx.textAlign = "center";
-            ctx.fillText("[E] JOGAR XADREZ", lx, h.y - 14);
-        }
+        ctx.fillStyle = "#161616"; ctx.fillRect(lx - 42, h.y - 24, 84, 14);
+        ctx.strokeStyle = "#FFFFFF"; ctx.lineWidth = 1; ctx.strokeRect(lx - 42, h.y - 24, 84, 14);
+        ctx.fillStyle = "#00ffcc"; ctx.font = "8px monospace"; ctx.textAlign = "center";
+        ctx.fillText("[E] JOGAR XADREZ", lx, h.y - 14);
         ctx.restore();
     },
 

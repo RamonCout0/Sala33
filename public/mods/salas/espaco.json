@@ -1,0 +1,13 @@
+{
+  "id": "espaco",
+  "nome": "ESPAÇO",
+  "corFundo": "#05060d",
+  "portas": [
+    { "destino": "the_hub", "x": 5, "y": 128, "w": 18, "h": 46, "spawnX": 280, "spawnY": 80 }
+  ],
+  "extras": {
+    "_comentario": "luneta = hitbox onde o jogador aperta [E]. arte = a imagem que aparece DENTRO da lente, por cima do shader (partes transparentes mostram o espaço). Troque assets/maps/espaco.png pela sua arte (PNG com transparência). Lógica em mods/logicas/espaco.js.",
+    "luneta": { "x": 300, "y": 150, "w": 50, "h": 60 },
+    "arte": "assets/maps/espaco.png"
+  }
+}

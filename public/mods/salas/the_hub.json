@@ -10,6 +10,6 @@
     { "destino": "floresta",   "x": 35,  "y": 60,  "w": 60, "h": 90,  "spawnX": 184, "spawnY": 230 },
     { "destino": "o_quarto",   "x": 180, "y": 292, "w": 70, "h": 8,   "spawnX": 184, "spawnY": 40  },
     { "destino": "aquario",    "x": 150, "y": 137, "w": 5, "h": 5,   "spawnX": 30, "spawnY": 152 },
-    { "destino": "fundo_teste","x": 195, "y": 140, "w": 14, "h": 14,  "spawnX": 200, "spawnY": 240 }
+    { "destino": "espaco",     "x": 280, "y": 50, "w": 30, "h": 18,  "spawnX": 50, "spawnY": 150 }
   ]
 }

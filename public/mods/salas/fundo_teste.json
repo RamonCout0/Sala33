@@ -1,4 +1,5 @@
 {
+  "_comentario": "Sala-exemplo do hook renderFundo (fundo de vídeo). NENHUMA porta leva até ela de propósito — fica fora do alcance do jogador comum. Pra testar, adicione temporariamente uma porta com destino 'fundo_teste' em outra sala. Ver MODDING.md -> 'Ordem de renderização'.",
   "id": "fundo_teste",
   "nome": "TESTE — FUNDO ANIMADO",
   "corFundo": "#0c0c0c",
