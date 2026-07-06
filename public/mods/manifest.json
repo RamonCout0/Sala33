@@ -15,9 +15,13 @@
     "sonhos_3",
     "xadrez",
     "fundo_teste",
-    "espaco"
+    "espaco",
+    "trilhas",
+    "jardim",
+    "jardim_noturno"
   ],
   "logicas": [
+    "trilhas",
     "sala_jogos",
     "xadrez",
     "fundo_teste",

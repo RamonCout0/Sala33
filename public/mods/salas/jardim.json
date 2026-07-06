@@ -1,0 +1,10 @@
+{
+  "id": "jardim",
+  "nome": "FONTE DO JARDIM",
+  "corFundo": "#1a1a1a",
+  "imagem": "assets/maps/jardim.png",
+  "musica": "assets/music/musica_jardim.mp3",
+  "portas": [
+    { "destino": "trilhas", "x": 390, "y": 210, "w": 10, "h": 40, "spawnX":23 , "spawnY": 218  }
+  ]
+}

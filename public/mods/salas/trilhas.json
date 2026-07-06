@@ -1,0 +1,12 @@
+{
+    "id": "trilhas",
+    "nome": "CAMPOS",
+    "corFundo": "#1a1a1a",
+    "imagem": "assets/maps/trilhas.mp4",
+    "musica": "assets/music/musica_trilhas.mp3",
+    "portas": [
+        { "destino": "sala_jogos", "x": 385, "y": 176, "w": 20, "h": 40, "spawnX": 26, "spawnY": 200},
+        { "destino": "jardim_noturno", "x": 165, "y": 0, "w": 40, "h": 10, "spawnX": 172, "spawnY": 253},
+        { "destino": "jardim", "x": 0, "y": 208, "w": 20, "h": 40, "spawnX": 340, "spawnY": 210}   
+    ]
+}
