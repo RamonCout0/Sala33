@@ -40,13 +40,14 @@ void main(){
   p/=u_zoom;
   p+=u_pan;                                   // mira da luneta (setas)
   p+=vec2(u_time*0.012, u_time*0.006);
-  // nebulosa
+  // nebulosa (TONS DE CINZA — combina com o noir preto-e-branco do jogo)
   float n =fbm(p*2.5+vec2(0.0,u_time*0.02));
   float n2=fbm(p*1.3-vec2(u_time*0.015,0.0));
-  vec3 col=vec3(0.015,0.02,0.05);
-  col+=vec3(0.18,0.07,0.32)*pow(n,2.2);
-  col+=vec3(0.05,0.12,0.25)*pow(n2,2.0);
-  // estrelas (3 camadas) com brilho piscante
+  float g0=0.03;                    // fundo quase preto
+  g0+=0.36*pow(n,2.2);              // nuvem cinza
+  g0+=0.16*pow(n2,2.0);             // segunda camada
+  vec3 col=vec3(g0);
+  // estrelas (3 camadas) com brilho piscante — brancas
   for(float i=0.0;i<3.0;i++){
     float sc=7.0+i*9.0;
     vec2 sp=p*sc;
@@ -55,7 +56,7 @@ void main(){
     if(h>th){
       vec2 g=fract(sp)-0.5;
       float tw=0.6+0.4*sin(u_time*2.5+h*40.0);
-      col+=vec3(0.9,0.95,1.0)*smoothstep(0.06,0.0,length(g))*tw*(h-th)/(1.0-th);
+      col+=vec3(1.0)*smoothstep(0.06,0.0,length(g))*tw*(h-th)/(1.0-th);
     }
   }
   // vinheta sutil
@@ -107,11 +108,14 @@ SALA33_REGISTRAR("espaco", {
 
     onFisica(meuBicho, ws, teclas) {
         if (this._modo === "luneta" && teclas) {
-            const v = 2.4;   // velocidade da mira
+            const v = 2.4;    // velocidade da mira
+            const LIM = 90;   // limite da mira (px) — não deixa varrer o espaço infinito
             if (teclas["ArrowLeft"]  || teclas["KeyA"]) this._panX -= v;
             if (teclas["ArrowRight"] || teclas["KeyD"]) this._panX += v;
             if (teclas["ArrowUp"]    || teclas["KeyW"]) this._panY -= v;
             if (teclas["ArrowDown"]  || teclas["KeyS"]) this._panY += v;
+            this._panX = Math.max(-LIM, Math.min(LIM, this._panX));
+            this._panY = Math.max(-LIM, Math.min(LIM, this._panY));
         }
         return { bloqueiaMovimento: this._modo === "luneta", tremor: 0 };
     },
