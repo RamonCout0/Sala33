@@ -2,6 +2,7 @@
   "id": "espaco",
   "nome": "ESPAÇO",
   "corFundo": "#05060d",
+  "imagem": "assets/maps/espaco2.png",
   "portas": [
     { "destino": "the_hub", "x": 5, "y": 128, "w": 18, "h": 46, "spawnX": 280, "spawnY": 80 }
   ],
