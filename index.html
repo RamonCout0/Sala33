@@ -179,6 +179,8 @@
             display: flex; align-items: center; justify-content: center;
             padding: 0; box-shadow: none; cursor: pointer;
             -webkit-tap-highlight-color: transparent;
+            -webkit-touch-callout: none;
+            touch-action: none;
             user-select: none;
         }
         .dpad-btn:active { background: rgba(255,255,255,0.25); border-color: #fff; }
@@ -203,6 +205,8 @@
             display: flex; align-items: center; justify-content: center;
             padding: 0; box-shadow: none; cursor: pointer;
             -webkit-tap-highlight-color: transparent;
+            -webkit-touch-callout: none;
+            touch-action: none;
             user-select: none; letter-spacing: 1px;
         }
         .action-btn:active { background: rgba(255,255,255,0.25); border-color: #fff; }
@@ -258,11 +262,41 @@
             canvas {
                 width: 100% !important;
                 height: auto !important;
+                border-width: 2px;
+                touch-action: none; /* dedo no mapa não rola a página */
             }
             #gameUI { width: 100%; align-items: center; }
             #chatContainer { display: none !important; }
             footer, [style*='position: fixed'][style*='right'] { display: none !important; }
             #configMenu { display: none !important; }
+
+            /* iOS dá zoom automático em input com fonte < 16px */
+            #menu input, #chatOverlayInput, .perfil-input { font-size: 16px !important; }
+
+            /* Controles na zona dos polegares (embaixo da tela), fora do mapa */
+            #mobileControls.ativo {
+                position: fixed;
+                bottom: calc(12px + env(safe-area-inset-bottom, 0px));
+                left: 0; right: 0;
+                padding: 0 16px;
+            }
+            #dpad {
+                grid-template-columns: 56px 56px 56px;
+                grid-template-rows: 56px 56px 56px;
+                gap: 4px;
+            }
+            .dpad-btn { width: 56px; height: 56px; font-size: 20px; }
+            .action-btn { width: 60px; height: 60px; font-size: 14px; }
+        }
+        /* Celular deitado: encaixa o mapa pela altura, controles sobrepõem as laterais */
+        @media (max-width: 850px) and (orientation: landscape) {
+            body { padding: 4px 0; }
+            #gameCanvasWrapper { text-align: center; }
+            canvas {
+                width: auto !important;
+                height: calc(100vh - 12px) !important;
+                height: calc(100dvh - 12px) !important;
+            }
         }
         /* Abas de autenticação */
         #authTabs {

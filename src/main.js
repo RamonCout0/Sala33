@@ -604,10 +604,31 @@ window.addEventListener("blur", () => { teclas = {}; meuBicho.animTick = 0; });
 //   CONTROLES MOBILE (TOUCH)
 // =====================================================
 function setupMobileControls() {
-    if (!("ontouchstart" in window)) return;
+    // Detecção robusta: ontouchstart falha em notebook touch / alguns Androids.
+    const temTouch = ("ontouchstart" in window)
+        || (navigator.maxTouchPoints || 0) > 0
+        || (window.matchMedia?.("(pointer: coarse)").matches ?? false);
 
-    // Ativa o overlay do d-pad
-    document.getElementById("mobileControls")?.classList.add("ativo");
+    // Ativa o overlay do d-pad só em aparelho com toque; os listeners são
+    // ligados sempre (Pointer Events cobrem toque, caneta e mouse), então
+    // forçar a classe 'ativo' via devtools também funciona pra depurar.
+    if (temTouch) document.getElementById("mobileControls")?.classList.add("ativo");
+
+    // Segurar o botão = segurar a tecla. pointercancel/leave soltam por
+    // segurança (ex.: o navegador roubou o gesto ou o dedo escorregou).
+    const segurar = (btn, aoApertar, aoSoltar) => {
+        btn.addEventListener("pointerdown", e => {
+            e.preventDefault();
+            aoApertar();
+            // captura mantém o pointerup no botão mesmo se o dedo escorregar;
+            // pode lançar se o pointer não estiver mais ativo — não é fatal
+            try { btn.setPointerCapture(e.pointerId); } catch {}
+        });
+        for (const tipo of ["pointerup", "pointercancel"]) {
+            btn.addEventListener(tipo, e => { e.preventDefault(); aoSoltar(); });
+        }
+        btn.addEventListener("contextmenu", e => e.preventDefault()); // long-press Android
+    };
 
     // Mapeia botões do d-pad para códigos de tecla
     const mapeamento = {
@@ -619,26 +640,22 @@ function setupMobileControls() {
     for (const [id, code] of Object.entries(mapeamento)) {
         const btn = document.getElementById(id);
         if (!btn) continue;
-        btn.addEventListener("touchstart", e => { e.preventDefault(); teclas[code] = true; }, { passive: false });
-        btn.addEventListener("touchend",   e => { e.preventDefault(); teclas[code] = false; }, { passive: false });
-        btn.addEventListener("touchcancel",e => { e.preventDefault(); teclas[code] = false; }, { passive: false });
+        segurar(btn, () => { teclas[code] = true; }, () => { teclas[code] = false; });
     }
 
     // Botão de interação [E]
-    document.getElementById("btn-interact")?.addEventListener("touchstart", e => {
-        e.preventDefault();
+    const btnE = document.getElementById("btn-interact");
+    if (btnE) segurar(btnE, () => {
         if (ws?.readyState === WebSocket.OPEN) {
             teclas["KeyE"] = true;
             getLogica()?.onTeclaDown?.("KeyE", ws, meuBicho);
             setTimeout(() => { teclas["KeyE"] = false; }, 150);
         }
-    }, { passive: false });
+    }, () => {});
 
     // Botão de chat — abre overlay
-    document.getElementById("btn-chat-open")?.addEventListener("touchstart", e => {
-        e.preventDefault();
-        abrirChatMobile();
-    }, { passive: false });
+    const btnChat = document.getElementById("btn-chat-open");
+    if (btnChat) segurar(btnChat, () => abrirChatMobile(), () => {});
 
     // Input do chat overlay
     const overlayInput = document.getElementById("chatOverlayInput");
