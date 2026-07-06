@@ -252,7 +252,9 @@
             cursor: pointer; box-shadow: none;
         }
 
-        @media (max-width: 850px) {
+        /* Mobile: tela estreita OU celular deitado (tela baixa + toque —
+           iPhone em paisagem passa de 850px de largura) */
+        @media (max-width: 850px), (max-height: 520px) and (pointer: coarse) {
             body {
                 justify-content: flex-start;
                 overflow-y: auto;
@@ -289,7 +291,7 @@
             .action-btn { width: 60px; height: 60px; font-size: 14px; }
         }
         /* Celular deitado: encaixa o mapa pela altura, controles sobrepõem as laterais */
-        @media (max-width: 850px) and (orientation: landscape) {
+        @media (max-width: 850px) and (orientation: landscape), (max-height: 520px) and (pointer: coarse) {
             body { padding: 4px 0; }
             #gameCanvasWrapper { text-align: center; }
             canvas {
@@ -571,7 +573,7 @@
             padding-top: 4px; margin-bottom: 3px;
         }
 
-        @media (max-width: 850px) {
+        @media (max-width: 850px), (max-height: 520px) and (pointer: coarse) {
             #pvPanel { width: 100vw; max-width: 100vw; }
             #btnSocialToggle { top: 6px; right: 6px; padding: 6px 10px; font-size: 9px; }
             #debugOverlay { left: 4px; width: 170px; font-size: 7px; }
@@ -719,7 +721,7 @@
         #perfilMsg.erro { display: block; background: #2a1010; color: #ff6666; border: 1px solid #ff6666; }
         #perfilMsg.ok   { display: block; background: #102a10; color: #66ff88; border: 1px solid #66ff88; }
 
-        @media (max-width: 850px) {
+        @media (max-width: 850px), (max-height: 520px) and (pointer: coarse) {
             #btnPerfilToggle { top: auto; bottom: 6px; right: 6px; padding: 6px 10px; font-size: 9px; }
         }
 
