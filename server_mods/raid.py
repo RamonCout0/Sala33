@@ -2,6 +2,7 @@
 # Ciclo: IDLE → CARREGANDO → ATAQUE → RESET → IDLE
 
 import json
+import random
 
 HANDLES = ["esquivar_raid"]
 SALA    = "raid"
@@ -27,6 +28,13 @@ def _na_zona_segura(jogador):
     z = ZONA_SEGURA
     return (z["x"] <= jogador["x"] <= z["x"] + z["w"] and
             z["y"] <= jogador["y"] <= z["y"] + z["h"])
+
+
+def _pos_fora_da_zona():
+    """Posição aleatória FORA da zona segura — espalha os atingidos pela sala
+    em vez de jogar todo mundo no mesmo ponto central."""
+    # x começa em 75 (à direita da zona segura, que vai até x≈61) → sempre fora.
+    return random.randint(75, 360), random.randint(140, 240)
 
 
 async def _broadcast(SALAS, JOGADORES, payload):
@@ -82,14 +90,22 @@ async def tick(JOGADORES, SALAS, enviar_para_sala):
                     continue
                 j = JOGADORES[ws]
                 if ws not in STATE["esquivaram"] and not _na_zona_segura(j):
-                    j["x"] = STATE["spawn"]["x"]
-                    j["y"] = STATE["spawn"]["y"]
+                    sx, sy = _pos_fora_da_zona()   # cada atingido vai pra um lugar diferente
+                    j["x"] = sx
+                    j["y"] = sy
+                    # Avisa o PRÓPRIO jogador: o cliente ignora 'movimento' do seu sid,
+                    # então mandamos um evento dedicado que move o meuBicho dele.
+                    try:
+                        j["queue"].put_nowait(json.dumps({
+                            "tipo": "raid_empurrao", "x": sx, "y": sy,
+                        }))
+                    except Exception:
+                        pass
+                    # Avisa os OUTROS com o sid correto (antes era id(ws), que não batia
+                    # com nenhum jogador → o empurrão não aparecia pra ninguém).
                     await enviar_para_sala(SALA, {
-                        "tipo": "movimento",
-                        "id":   id(ws),
-                        "x":    STATE["spawn"]["x"],
-                        "y":    STATE["spawn"]["y"],
-                        "lado": "direita",
+                        "tipo": "movimento", "id": j["sid"],
+                        "x": sx, "y": sy, "lado": "direita",
                     })
 
             await _broadcast(SALAS, JOGADORES, {

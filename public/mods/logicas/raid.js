@@ -40,7 +40,10 @@ SALA33_REGISTRAR("raid", {
         const defs = salaConfig.extras?.sprites || {};
         for (const [fase, path] of Object.entries(defs)) {
             const img = new Image();
-            img.src = path;
+            img.onerror = () => { img._erro = true; };
+            // Caminho absoluto: garante que resolve a partir da raiz (publicDir),
+            // independente da URL atual. Caminho relativo podia falhar.
+            img.src = (path.startsWith("http") || path.startsWith("/")) ? path : "/" + path;
             this._sprites[fase] = img;
         }
     },
@@ -60,10 +63,14 @@ SALA33_REGISTRAR("raid", {
             this._progresso = dados.progresso || 0;
 
             if (dados.fase === "ataque") {
-                this._flashTimer   = 20;
-                this._feedbackTipo = this._esquivou ? "parry" : "hit";
-                this._feedbackTimer = 70;
+                this._flashTimer = 20;
                 this._criarExplosao(this._boss.x, this._boss.y + 160);
+                // Esquivou → PARRY. O "ATINGIDO" agora vem do evento raid_empurrao
+                // (só quem foi REALMENTE jogado), pra bater com o que acontece de fato.
+                if (this._esquivou) {
+                    this._feedbackTipo  = "parry";
+                    this._feedbackTimer = 70;
+                }
                 this._esquivou = false;
             }
             if (dados.fase === "idle") {
@@ -73,6 +80,15 @@ SALA33_REGISTRAR("raid", {
         }
         if (dados.tipo === "raid_esquiva") {
             this._esquivou = true;
+            return true;
+        }
+        if (dados.tipo === "raid_empurrao") {
+            // O servidor me jogou pro spawn — move o meu boneco de verdade
+            // e dispara o feedback de "ATINGIDO" (quem foi empurrado de fato).
+            meuBicho.x = dados.x;
+            meuBicho.y = dados.y;
+            this._feedbackTipo  = "hit";
+            this._feedbackTimer = 70;
             return true;
         }
         return false;
@@ -138,19 +154,23 @@ SALA33_REGISTRAR("raid", {
 
     _atualizarFogo(ctx) {
         this._fogo = this._fogo.filter(p => p.vida > 0);
+        ctx.save();
+        ctx.globalCompositeOperation = "lighter";  // brilho aditivo → glow do sopro
         for (const p of this._fogo) {
             p.x    += p.vx;
             p.y    += p.vy;
             p.vy   += 0.05;  // acelera pra baixo
             p.vx   *= 0.98;
             p.vida -= p.decay;
-            p.tam  *= 0.995;
-            const lum = Math.floor(p.vida * 220);
-            ctx.globalAlpha = p.vida * 0.85;
+            p.tam  *= 0.992;
+            const lum = Math.floor(120 + p.vida * 135);  // núcleo quente (claro)
+            ctx.globalAlpha = p.vida * 0.5;
             ctx.fillStyle   = `rgb(${lum},${lum},${lum})`;
-            ctx.fillRect(p.x, p.y, p.tam, p.tam);
+            ctx.beginPath();
+            ctx.arc(p.x, p.y, Math.max(0.5, p.tam), 0, Math.PI * 2);
+            ctx.fill();
         }
-        ctx.globalAlpha = 1;
+        ctx.restore();
     },
 
     _criarFumaca(cx, cy, quantidade) {
@@ -174,11 +194,17 @@ SALA33_REGISTRAR("raid", {
             p.x    += p.vx;
             p.y    += p.vy;
             p.vida -= p.decay;
-            p.tam  *= 1.004;
-            const lum = Math.floor(40 + p.vida * 80);
-            ctx.globalAlpha = p.vida * 0.35;
-            ctx.fillStyle   = `rgb(${lum},${lum},${lum})`;
-            ctx.fillRect(p.x - p.tam / 2, p.y - p.tam / 2, p.tam, p.tam);
+            p.tam  *= 1.006;
+            const lum = Math.floor(40 + p.vida * 70);
+            const a   = p.vida * 0.3;
+            // Gradiente radial → fumaça com borda suave (não mais quadrados)
+            const g = ctx.createRadialGradient(p.x, p.y, 0, p.x, p.y, p.tam);
+            g.addColorStop(0, `rgba(${lum},${lum},${lum},${a})`);
+            g.addColorStop(1, `rgba(${lum},${lum},${lum},0)`);
+            ctx.fillStyle = g;
+            ctx.beginPath();
+            ctx.arc(p.x, p.y, p.tam, 0, Math.PI * 2);
+            ctx.fill();
         }
         ctx.globalAlpha = 1;
     },
@@ -203,19 +229,23 @@ SALA33_REGISTRAR("raid", {
 
     _atualizarExplosao(ctx) {
         this._explosao = this._explosao.filter(p => p.vida > 0);
+        ctx.save();
+        ctx.globalCompositeOperation = "lighter";  // estouro luminoso
         for (const p of this._explosao) {
             p.x    += p.vx;
             p.y    += p.vy;
             p.vy   += 0.12;
             p.vx   *= 0.97;
             p.vida -= p.decay;
-            p.tam  *= 0.97;
-            const lum = Math.floor(p.vida * 255);
-            ctx.globalAlpha = p.vida;
+            p.tam  *= 0.96;
+            const lum = Math.floor(140 + p.vida * 115);
+            ctx.globalAlpha = p.vida * 0.8;
             ctx.fillStyle   = `rgb(${lum},${lum},${lum})`;
-            ctx.fillRect(p.x, p.y, p.tam, p.tam);
+            ctx.beginPath();
+            ctx.arc(p.x, p.y, Math.max(0.5, p.tam), 0, Math.PI * 2);
+            ctx.fill();
         }
-        ctx.globalAlpha = 1;
+        ctx.restore();
     },
 
     // ── Helpers de render ─────────────────────────────
@@ -274,19 +304,22 @@ SALA33_REGISTRAR("raid", {
         ctx.save(); this._atualizarFogo(ctx); ctx.restore();
 
         const img = this._sprites[fase] || this._sprites["idle"];
-        if (img?.complete && img.naturalWidth !== 0) {
+        const pronto = img?.complete && img.naturalWidth !== 0;
+        if (pronto) {
             const w = 180, h = 150; // tamanho aumentado
+            ctx.drawImage(img, bx - w / 2, by, w, h);
             if (fase === "ataque") {
+                // Brilho no FORMATO do dragão: redesenha o sprite em 'screen'
+                // (antes era um retângulo branco → virava um quadrado ao redor dele).
                 ctx.save();
-                ctx.drawImage(img, bx - w / 2, by, w, h);
                 ctx.globalCompositeOperation = "screen";
-                ctx.fillStyle = "rgba(255,255,255,0.45)";
-                ctx.fillRect(bx - w / 2, by, w, h);
-                ctx.restore();
-            } else {
+                ctx.globalAlpha = 0.4;
                 ctx.drawImage(img, bx - w / 2, by, w, h);
+                ctx.restore();
             }
         } else {
+            // Fallback: dragão procedural enquanto o PNG carrega OU se falhar.
+            // (Com o caminho absoluto, o PNG carrega rápido e isso quase não aparece.)
             this._desenharDragaoProcedural(ctx, bx, by, fase, prog);
         }
     },
@@ -335,28 +368,45 @@ SALA33_REGISTRAR("raid", {
         if (this._feedbackTimer <= 0) return;
         this._feedbackTimer--;
 
-        const alpha  = this._feedbackTimer / 70;
-        const sobida = (1 - alpha) * 40;
+        const t     = 1 - this._feedbackTimer / 70;   // progresso 0 → 1
+        const alpha = Math.min(1, (1 - t) * 1.8);      // segura visível e some no fim
+        const cx    = meuBicho.x + 16;
+        const cy    = meuBicho.y - 12 - t * 28;        // sobe enquanto some
 
         ctx.save();
-        ctx.globalAlpha = alpha;
-        ctx.textAlign   = "center";
+        ctx.textAlign = "center";
 
         if (this._feedbackTipo === "parry") {
-            ctx.font      = `bold ${Math.floor(20 + (1 - alpha) * 6)}px monospace`;
-            ctx.fillStyle = "#ffffff";
-            ctx.fillText("PARRY!", meuBicho.x + 16, meuBicho.y - 10 - sobida);
-            ctx.font      = "bold 10px monospace";
-            ctx.fillStyle = "rgba(255,255,255,0.5)";
-            ctx.fillText("esquivou!", meuBicho.x + 16, meuBicho.y + 4 - sobida);
+            // Anel de impacto que estoura no início
+            const ringR = t * 48;
+            ctx.globalAlpha = Math.max(0, 1 - t * 1.4) * 0.8;
+            ctx.strokeStyle = "#ffffff";
+            ctx.lineWidth   = 2;
+            ctx.beginPath();
+            ctx.arc(meuBicho.x + 16, meuBicho.y + 2, ringR, 0, Math.PI * 2);
+            ctx.stroke();
+
+            // Texto com "pop" — escala estoura grande e assenta
+            const pop = 1 + Math.max(0, 0.45 - t) * 2.4;
+            ctx.globalAlpha = alpha;
+            ctx.fillStyle   = "#ffffff";
+            ctx.font        = `bold ${Math.floor(20 * pop)}px monospace`;
+            ctx.fillText("PARRY!", cx, cy);
+            ctx.globalAlpha = alpha * 0.7;
+            ctx.font        = "bold 9px monospace";
+            ctx.fillText("esquiva perfeita", cx, cy + 12);
         } else {
-            const dx = Math.floor(Date.now() / 50) % 2 === 0 ? 2 : -2;
-            ctx.font      = `bold ${Math.floor(18 + (1 - alpha) * 4)}px monospace`;
-            ctx.fillStyle = "#aaaaaa";
-            ctx.fillText("ARGH!", meuBicho.x + 16 + dx, meuBicho.y - 10 - sobida);
-            ctx.font      = "9px monospace";
-            ctx.fillStyle = "rgba(160,160,160,0.6)";
-            ctx.fillText("empurrado!", meuBicho.x + 16, meuBicho.y + 4 - sobida);
+            // Hit — tremor horizontal pra dar impacto
+            const shake = Math.max(0, 1 - t) * 5;
+            const dx    = Math.sin(this._feedbackTimer * 0.8) * shake;
+            ctx.globalAlpha = alpha;
+            ctx.fillStyle   = "#cccccc";
+            ctx.font        = `bold ${Math.floor(18 + Math.max(0, 0.4 - t) * 18)}px monospace`;
+            ctx.fillText("ATINGIDO!", cx + dx, cy);
+            ctx.globalAlpha = alpha * 0.7;
+            ctx.fillStyle   = "#999999";
+            ctx.font        = "9px monospace";
+            ctx.fillText("empurrado!", cx, cy + 12);
         }
         ctx.restore();
     },

@@ -8,21 +8,30 @@ A ideia é simples: tudo o que define o mundo do jogo vive em duas pastas — `p
 
 ## 📁 Estrutura do projeto
 
+> **⚠️ Mudança importante:** o cliente foi refatorado. **Não existe mais `public/game.js`** — o engine do cliente agora é **modular**, escrito em ES Modules em `src/` e **buildado com Vite**. Mas isso **não muda nada pra quem faz mod**: seus mods continuam vivendo 100% em `public/mods/` e `server_mods/`, exatamente como antes. Você nunca precisa tocar em `src/`.
+
 ```
 Sala33/
 ├── server.py                       ← engine do servidor (não mexer)
 ├── server_mods/                    ← mecânicas server-side por sala
 │   ├── sala_jogos.py               (exemplo: Pong)
-│   └── o_quarto.py                 (exemplo: Duelo de Aura)
-└── public/
-    ├── index.html
-    ├── game.js                     ← engine do cliente (não mexer)
+│   ├── o_quarto.py                 (exemplo: Duelo de Aura)
+│   └── xadrez.py                   (exemplo: Xadrez com regras completas)
+├── index.html                      ← entrada do Vite (na raiz)
+├── vite.config.js                  ← config do build
+├── package.json                    ← scripts: npm run dev / build
+├── src/                            ← engine do CLIENTE (não mexer)
+│   ├── main.js                     ← loop, estado, input, render
+│   ├── net/  audio/  render/       ← módulos do engine
+│   └── ui/   world/  core/
+├── dist/                           ← saída do `npm run build` (gerado, gitignored)
+└── public/                         ← servido VERBATIM (copiado pro dist/ no build)
     ├── assets/
-    │   ├── maps/                   ← imagens de fundo das salas
+    │   ├── maps/                   ← imagens/vídeos de fundo das salas
     │   ├── characters/             ← sprites dos personagens
     │   ├── music/                  ← trilhas
     │   └── artworks/               ← obras do museu, etc
-    └── mods/
+    └── mods/                       ← ✦ AQUI é onde você trabalha ✦
         ├── manifest.json           ← lista o que carregar
         ├── personagens.json        ← roster de personagens
         ├── salas/                  ← um JSON por sala
@@ -30,6 +39,8 @@ Sala33/
         └── logicas/                ← plugins JS client-side por sala
             └── *.js
 ```
+
+> **Por que `public/mods/logicas/*.js` não some no build:** esses plugins ficam no `publicDir` do Vite, então são copiados **sem serem bundlados** e carregados em **runtime** (via `<script>`) — é isso que mantém o sistema de mods aberto pra qualquer pessoa.
 
 ---
 
@@ -59,6 +70,17 @@ Pra criar uma sala chamada `minha_sala`:
 
 
 > **Sobre GIF e MP4 como fundo:** GIF é exibido como imagem estática no canvas (só o primeiro frame). Para fundo animado de verdade, use MP4 ou WEBM e implemente via plugin em `mods/logicas/` usando um elemento `<video>` como fonte do `drawImage` a cada frame.
+
+> ### 🪧 ORDEM DE RENDERIZAÇÃO — leia antes de desenhar qualquer coisa
+>
+> O canvas não tem `z-index` automático como o CSS: **o que é desenhado por último fica por cima.** A cada frame, o engine pinta nesta ordem:
+>
+> 1. **Fundo estático** da sala (a imagem/cor do JSON)
+> 2. **`renderFundo(ctx)`** do seu plugin  ← desenhe **fundos animados** (vídeo, neblina de fundo) aqui
+> 3. **Outros jogadores** e o **seu personagem**
+> 4. **`render(ctx, ...)`** do seu plugin  ← desenhe **overlays por cima** (HUD, chuva, minigame) aqui
+>
+> ⚠️ **Erro clássico:** desenhar um fundo de vídeo dentro de `render()`. Como `render()` roda **depois** dos jogadores, o vídeo "carimba" por cima de todo mundo e some os personagens. Para fundo, use **`renderFundo`**.
 
 **Exemplo de plugin com fundo em vídeo animado:**
 
@@ -93,13 +115,16 @@ SALA33_REGISTRAR("minha_sala", {
     onTeclaDown() { return false; },
     onFisica() { return { bloqueiaMovimento: false, tremor: 0 }; },
 
-    render(ctx, meuBicho, outrosJogadores, imagensSprites, tamSprite) {
-        // Desenha o vídeo como fundo a cada frame
-        // (sobrescreve o fundo estático do engine)
+    // ✅ Fundo animado vai em renderFundo (roda ANTES dos jogadores → fica atrás).
+    renderFundo(ctx) {
         if (this._pronto && this._video) {
             ctx.drawImage(this._video, 0, 0, ctx.canvas.width, ctx.canvas.height);
         }
     },
+
+    // render() continua existindo pra overlays POR CIMA dos jogadores
+    // (neblina, chuva, HUD). Deixe vazio se não precisar.
+    render(ctx, meuBicho, outrosJogadores, imagensSprites, tamSprite) {},
 });
 ```
 
@@ -112,7 +137,7 @@ No JSON da sala, aponte `"imagem"` pro arquivo de vídeo normalmente:
 }
 ```
 
-O engine vai tentar carregar o vídeo como `<img>` (vai falhar silenciosamente) e o plugin sobrescreve o fundo no `render()` com o frame atual do vídeo. O resultado é animação fluida em loop sem afetar a performance dos outros jogadores.
+O engine vai tentar carregar o vídeo como `<img>` (vai falhar silenciosamente) e o plugin desenha o frame atual do vídeo no `renderFundo()`, **atrás** dos jogadores. O resultado é animação fluida em loop, com os personagens visíveis por cima, sem afetar a performance dos outros jogadores.
 
 ### 2. Crie o JSON da sala
 
@@ -201,12 +226,21 @@ SALA33_REGISTRAR("minha_sala", {
         return { bloqueiaMovimento: false, tremor: 0 };
     },
 
+    renderFundo(ctx) {
+        // (Opcional) Desenhado logo APÓS o fundo estático e ANTES dos
+        // jogadores → fica ATRÁS deles. Use pra fundo animado (vídeo),
+        // neblina de fundo, etc. Ver a seção "Ordem de renderização".
+    },
+
     render(ctx, meuBicho, outrosJogadores, imagensSprites, tamSprite) {
         // Desenhe overlays customizados aqui.
-        // O fundo da sala e os jogadores já foram desenhados.
+        // É a ÚLTIMA coisa do frame → fica POR CIMA do fundo e dos jogadores.
+        // Bom pra HUD, chuva, neblina por cima, telas de minigame.
     },
 });
 ```
+
+> **Resumo dos dois hooks de desenho:** use **`renderFundo(ctx)`** pra tudo que fica **atrás** dos jogadores (fundo animado) e **`render(ctx, ...)`** pra tudo que fica **na frente** (overlays). Os dois são opcionais.
 
 ### 2. Registre a lógica no manifest
 
@@ -321,13 +355,26 @@ tocarMusica(salaAtual); // volta pra normal
 
 ---
 
-## 🛠️ Reset rápido para testar
+## 🛠️ Rodar e testar localmente
 
+Como o cliente agora é buildado com Vite, tem dois jeitos:
+
+**A) Dev (recomendado pra desenvolver) — hot reload do engine:**
 ```bash
-python server.py
+npm install        # só na primeira vez
+npm run dev        # Vite na :5173  (terminal 1)
+python server.py   # WebSocket na :8080  (terminal 2)
 ```
+Abra **http://localhost:5173**. O client conecta o WebSocket direto na `:8080`.
 
-Os JSONs e plugins são servidos com `Cache-Control: no-cache`, então é só recarregar (F5) o browser pra ver mudanças. Mudanças em `server.py` ou `server_mods/*.py` exigem reiniciar o servidor.
+**B) Produção local (simula o deploy) — serve o build:**
+```bash
+npm run build      # gera o dist/
+python server.py   # serve dist/ na :8000 + WS na :8080
+```
+Abra **http://localhost:8000**.
+
+> **Sobre mexer em mod e ver a mudança:** os JSONs (`mods/salas/*.json`, `manifest.json`) e os plugins (`mods/logicas/*.js`) ficam no `public/` e são servidos com `Cache-Control: no-cache` — é só recarregar (F5) o browser. No modo **A (dev)** isso vale direto; no modo **B** você precisa rodar `npm run build` de novo (ou editar o arquivo correspondente dentro de `dist/`). Mudanças em `server.py` ou `server_mods/*.py` **sempre** exigem reiniciar o servidor.
 
 ---
 
@@ -403,7 +450,9 @@ git merge upstream/main
 
 ---
 
-Dúvidas? Olhe `server_mods/sala_jogos.py` e `mods/logicas/sala_jogos.js` — são os exemplos mais completos.
+Dúvidas? Olhe os exemplos prontos:
+- **Pong** — `server_mods/sala_jogos.py` + `mods/logicas/sala_jogos.js` (minigame 1v1 com física no servidor).
+- **Xadrez** — `server_mods/xadrez.py` + `mods/logicas/xadrez.js` (o mais completo: lobby de partidas, matchmaking, relógios, regras de xadrez completas e ranking Elo persistido em arquivo). Bom modelo pra quem quer um jogo de tabuleiro/turnos com sala de espera e placar.
 
 ---
 

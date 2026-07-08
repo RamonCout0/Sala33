@@ -12,10 +12,20 @@
     "aquario",
     "sonhos_1",
     "sonhos_2",
-    "sonhos_3"
+    "sonhos_3",
+    "xadrez",
+    "fundo_teste",
+    "espaco",
+    "trilhas",
+    "jardim",
+    "jardim_noturno"
   ],
   "logicas": [
+    "trilhas",
     "sala_jogos",
+    "xadrez",
+    "fundo_teste",
+    "espaco",
     "museu",
     "o_quarto",
     "televisao",

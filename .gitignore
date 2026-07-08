@@ -1,0 +1,24 @@
+# Node / Vite
+node_modules/
+dist/
+*.local
+
+# Python
+__pycache__/
+*.pyc
+.venv/
+venv/
+
+# Dados de runtime dos mods (ranking do xadrez, etc.)
+server_mods/xadrez_ranking.json
+
+# Env
+.env
+.env.*
+!.env.example
+
+# OS / editor
+.DS_Store
+Thumbs.db
+.vscode/
+.idea/

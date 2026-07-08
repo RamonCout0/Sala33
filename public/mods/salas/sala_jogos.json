@@ -9,7 +9,9 @@
     "pong": "assets/music/musica_pong.mp3"
   },
   "portas": [
-    { "destino": "the_hub", "x": 380, "y": 130, "w": 20, "h": 40, "spawnX": 45, "spawnY": 225 }
+    { "destino": "the_hub", "x": 380, "y": 130, "w": 20, "h": 40, "spawnX": 45, "spawnY": 225 },
+    { "destino": "xadrez", "x": 40, "y": 174, "w": 8, "h": 8, "spawnX": 287, "spawnY": 223},
+    { "destino": "trilhas", "x": 0, "y": 185, "w": 12, "h": 40, "spawnX": 352, "spawnY": 195 }
   ],
   "extras": {
     "_comentario": "Configurações específicas da sala. A lógica do minigame está em mods/logicas/sala_jogos.js (cliente) e server_mods/sala_jogos.py (servidor).",
