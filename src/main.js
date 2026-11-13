@@ -623,15 +623,23 @@ window.addEventListener("blur", () => { teclas = {}; meuBicho.animTick = 0; });
 //   CONTROLES MOBILE (TOUCH)
 // =====================================================
 function setupMobileControls() {
-    // Detecção robusta: ontouchstart falha em notebook touch / alguns Androids.
-    const temTouch = ("ontouchstart" in window)
-        || (navigator.maxTouchPoints || 0) > 0
-        || (window.matchMedia?.("(pointer: coarse)").matches ?? false);
+    // Mostra o d-pad só quando o PRINCIPAL meio de entrada é toque (celular/
+    // tablet). Antes bastava ter qualquer suporte a toque (maxTouchPoints > 0,
+    // "ontouchstart"), o que é verdade em muito PC/notebook Windows e fazia o
+    // controle aparecer no desktop.
+    const controles = document.getElementById("mobileControls");
+    const toquePrincipal = window.matchMedia?.("(hover: none) and (pointer: coarse)").matches ?? false;
+    if (toquePrincipal) controles?.classList.add("ativo");
 
-    // Ativa o overlay do d-pad só em aparelho com toque; os listeners são
-    // ligados sempre (Pointer Events cobrem toque, caneta e mouse), então
-    // forçar a classe 'ativo' via devtools também funciona pra depurar.
-    if (temTouch) document.getElementById("mobileControls")?.classList.add("ativo");
+    // Fallback: se o jogador realmente tocar na tela (notebook touch, Android
+    // que reporta hover), liga o d-pad na hora.
+    window.addEventListener("pointerdown", e => {
+        if (e.pointerType === "touch") controles?.classList.add("ativo");
+    }, { passive: true });
+
+    // Os listeners dos botões são ligados sempre (Pointer Events cobrem toque,
+    // caneta e mouse), então forçar a classe 'ativo' via devtools também
+    // funciona pra depurar.
 
     // Segurar o botão = segurar a tecla. pointercancel/leave soltam por
     // segurança (ex.: o navegador roubou o gesto ou o dedo escorregou).
