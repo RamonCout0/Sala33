@@ -5,7 +5,7 @@
 // =====================================================
 import { Wasm } from "./core/wasm.js";
 import { MAPAS, PATHS_SPRITES, AUDIO_PATHS } from "./world/config.js";
-import { precarregarAudios, tocarMusica, ajustarVolume } from "./audio/audio.js";
+import { tocarMusica, ajustarVolume } from "./audio/audio.js";
 import { initParticles, spawnFumaca, atualizarFumacas, desenharFumacas } from "./render/particles.js";
 import { inicializarPainelEmojis, appendChatMsg, atualizarPreviewSkin, traduzirEmotes, horaAtualBrasil, _aplicarGrayscaleEmojis } from "./ui/chat.js";
 import { setSocket, _wsUrl } from "./net/socket.js";
@@ -44,8 +44,20 @@ let estadoTransicao = "idle";
 let portaPendente = null;
 let legendaTimer = 0;
 
+// Loop com passo fixo: a física roda a 60 ticks/s independente da taxa do
+// monitor (60/120/144Hz). Antes, o "if delta >= 16.67" pulava frames de forma
+// irregular e o boneco andava aos trancos.
 let tempoAnterior = 0;
-const intervaloFps = 1000 / 60;
+let acumulador = 0;
+const PASSO_MS = 1000 / 60;
+const TOLERANCIA_MS = 1.5;   // absorve o jitter do vsync sem pular frame
+const MAX_PASSOS = 4;        // evita "espiral da morte" após aba em background
+
+// Interpolação dos outros jogadores: desliza da posição atual até a última
+// recebida em ~1 intervalo de envio (66ms), em vez de perseguir o alvo com
+// suavização exponencial (que ficava sempre ~3 frames atrasada).
+const INTERP_MS = 75;
+const SNAP_DIST = 80;
 
 // Throttle de envio de movimento: manda no máximo ~15x/s (a cada ~66ms)
 // em vez de 60x/s. Evita floodar o rate limiter do servidor (causa dos "TPs").
@@ -73,7 +85,7 @@ function registrarDebug(categoria, mensagem, meta) {
 // mutados in-place na inicialização). SALA_INICIAL é reatribuído, então fica local.
 let SALA_INICIAL = "the_hub";
 
-// Áudio (precarregarAudios / tocarMusica / ajustarVolume) vive em audio/audio.js
+// Áudio (tocarMusica / ajustarVolume) vive em audio/audio.js
 
 // =====================================================
 //   IMAGENS
@@ -82,9 +94,10 @@ const imagensSprites = {};
 const imagensCenarios = {};
 
 function carregarImagens() {
-    // Cache-bust via timestamp: garante que o browser sempre busca a versão
-    // mais recente dos assets, ignorando qualquer cache local ou de CDN.
-    const bust = `?v=${Date.now()}`;
+    // Cache-bust por build: muda a cada deploy (vite.config.js define
+    // __BUILD_ID__), então o browser/service worker reaproveitam o cache entre
+    // visitas mas pegam os assets novos depois de um deploy.
+    const bust = `?v=${__BUILD_ID__}`;
     for (const id in PATHS_SPRITES) {
         imagensSprites[id] = new Image();
         imagensSprites[id].src = PATHS_SPRITES[id] + bust;
@@ -277,7 +290,8 @@ function conectar(opts = {}) {
             : { tipo: "login", username: meuBicho.username, spriteId: meuBicho.spriteId, lado: meuBicho.lado };
         ws.send(JSON.stringify(payloadLogin));
         legendaTimer = 180;
-        precarregarAudios();
+        // Sem preload de todas as músicas (~80 MB): cada faixa é baixada sob
+        // demanda em tocarMusica(), sem disputar banda com o WebSocket.
         setupMobileControls();
         getLogica()?.onEnter?.(MAPAS[minhaSala]);
         requestAnimationFrame(loop);
@@ -465,12 +479,17 @@ function conectar(opts = {}) {
             if (btn) { btn.disabled = false; btn.textContent = "ALTERAR SENHA"; }
         }
         else if (dados.tipo === "movimento") {
-            if (outrosJogadores[dados.id]) {
-                if (dados.x > outrosJogadores[dados.id].x) outrosJogadores[dados.id].lado = "direita";
-                else if (dados.x < outrosJogadores[dados.id].x) outrosJogadores[dados.id].lado = "esquerda";
-                outrosJogadores[dados.id].targetX = dados.x;
-                outrosJogadores[dados.id].targetY = dados.y;
-                outrosJogadores[dados.id].movimentoTimer = 6;
+            const p = outrosJogadores[dados.id];
+            if (p) {
+                if (dados.x > p.x) p.lado = "direita";
+                else if (dados.x < p.x) p.lado = "esquerda";
+                // Novo segmento de interpolação: parte de onde ele está desenhado agora
+                p.fromX = p.x;
+                p.fromY = p.y;
+                p.targetX = dados.x;
+                p.targetY = dados.y;
+                p.interpT0 = performance.now();
+                p.movimentoTimer = 6;
             }
         }
         else if (dados.tipo === "jogador_saiu") {
@@ -849,10 +868,10 @@ function desenharBalao(texto, xCentro, yTopo, ellipsis = false) {
     ctx.lineTo(xCentro, yb + ab + 5);
     ctx.closePath();
     ctx.fillStyle = "#FFFFFF"; ctx.fill(); ctx.stroke();
+    // Sem ctx.filter aqui: trocar o filter a cada balão por frame é muito caro
+    // (principalmente Firefox/Safari) e o texto já é preto sobre branco.
     ctx.fillStyle = "#000000"; ctx.textAlign = "center";
-    ctx.filter = "grayscale(1)";
     ctx.fillText(texto, xCentro, yb + 10);
-    ctx.filter = "none";
 }
 
 function desenharReguaDebug() {
@@ -957,21 +976,22 @@ function desenhar() {
     ctx.font = "10px monospace"; ctx.textAlign = "center";
 
     // Outros jogadores
+    const agoraRender = performance.now();
     for (const id in outrosJogadores) {
         const p = outrosJogadores[id];
-        // Interpolação suave em direção à última posição recebida do servidor.
-        // Protege contra targetX/Y indefinidos (evita NaN).
+        // Interpolação linear por tempo até a última posição recebida.
+        // Protege contra campos indefinidos (evita NaN).
         if (p.targetX === undefined) p.targetX = p.x;
         if (p.targetY === undefined) p.targetY = p.y;
-        const dx = p.targetX - p.x;
-        const dy = p.targetY - p.y;
-        // Se a distância for grande (jogador deu "tp" real, ex: mudou de sala),
-        // snap direto em vez de deslizar lentamente.
-        if (Math.abs(dx) > 80 || Math.abs(dy) > 80) {
+        if (p.interpT0 === undefined) {
+            p.x = p.targetX; p.y = p.targetY;
+        } else if (Math.abs(p.targetX - p.fromX) > SNAP_DIST || Math.abs(p.targetY - p.fromY) > SNAP_DIST) {
+            // Salto grande (empurrão da raid, sentou no pong…): snap direto
             p.x = p.targetX; p.y = p.targetY;
         } else {
-            p.x += dx * 0.25;
-            p.y += dy * 0.25;
+            const t = Math.min(1, (agoraRender - p.interpT0) / INTERP_MS);
+            p.x = p.fromX + (p.targetX - p.fromX) * t;
+            p.y = p.fromY + (p.targetY - p.fromY) * t;
         }
         const bobeio = p.animTick > 0 ? Math.abs(Math.sin(p.animTick)) * -5 : 0;
         const img = imagensSprites[p.spriteId];
@@ -1055,12 +1075,20 @@ function desenhar() {
 // =====================================================
 function loop(timestamp) {
     requestAnimationFrame(loop);
-    const delta = timestamp - tempoAnterior;
-    if (delta >= intervaloFps) {
-        tempoAnterior = timestamp - (delta % intervaloFps);
+    if (!tempoAnterior) tempoAnterior = timestamp;
+    // Limita o delta (aba em background devolve saltos de segundos)
+    acumulador += Math.min(timestamp - tempoAnterior, 250);
+    tempoAnterior = timestamp;
+
+    let passos = 0;
+    while (acumulador >= PASSO_MS - TOLERANCIA_MS && passos < MAX_PASSOS) {
         atualizarFisica();
-        desenhar();
+        acumulador -= PASSO_MS;
+        passos++;
     }
+    if (passos === MAX_PASSOS) acumulador = 0;   // desistiu de alcançar: descarta o atraso
+    // Desenha só quando a física avançou (os plugins contam tempo por frame desenhado)
+    if (passos > 0) desenhar();
 }
 
 // =====================================================

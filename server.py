@@ -653,7 +653,7 @@ MAX_CHAT_LEN     = 200
 MAX_USERNAME_LEN = 16
 RATE_LIMIT_MSGS  = 30
 RATE_LIMIT_WIN   = 1.0
-MOVE_RATE_LIMIT  = 0.05
+MOVE_RATE_LIMIT  = 0.03   # cliente manda a cada ~66ms; folga pra jitter de rede não descartar pacotes
 MOVE_EPSILON     = 0.50
 USERNAME_RE      = re.compile(r"^[A-Za-z0-9_\- ]+$")
 EMAIL_RE         = re.compile(r"^[^@\s]+@[^@\s]+\.[^@\s]+$")
@@ -715,16 +715,20 @@ class Sessao:
 class Hub:
     def __init__(self, salas):
         self._sessions = {}
+        self._por_ws = {}   # websocket -> Sessao (lookup O(1) pros proxies dos mods)
         self._salas = {s: set() for s in salas}
         self._lock = asyncio.Lock()
 
     async def registrar(self, s):
         async with self._lock:
             self._sessions[s.sid] = s
+            self._por_ws[s.ws] = s
 
     async def remover(self, sid):
         async with self._lock:
             s = self._sessions.pop(sid, None)
+            if s:
+                self._por_ws.pop(s.ws, None)
             if s and s.sala and s.sala in self._salas:
                 self._salas[s.sala].discard(sid)
             return s
@@ -808,9 +812,7 @@ HANDLERS_POR_TIPO, MODS_COM_TICK, MODS_COM_LEAVE, MOD_SALA = {}, [], [], {}
 class _JogProxy:
     def __init__(self, hub): self._hub = hub
     def _find(self, ws):
-        for s in self._hub._sessions.values():
-            if s.ws is ws: return s
-        return None
+        return self._hub._por_ws.get(ws)
     def __contains__(self, ws): return self._find(ws) is not None
     def __getitem__(self, ws):
         s = self._find(ws)
@@ -1544,7 +1546,10 @@ async def main():
             await banco.limpar_tokens_expirados()
     asyncio.create_task(_limpeza_periodica())
 
-    ws_kwargs = dict(max_size=MAX_MSG_BYTES, max_queue=64, ping_interval=30, ping_timeout=10)
+    # compression=None: as mensagens são minúsculas (~60 bytes); comprimir cada uma
+    # por destinatário só gasta CPU e adiciona latência.
+    ws_kwargs = dict(max_size=MAX_MSG_BYTES, max_queue=64, ping_interval=30, ping_timeout=10,
+                     compression=None)
 
     def mk(h):
         async def _h(ws): await handler_ws(ws, h)

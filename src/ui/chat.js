@@ -111,13 +111,23 @@ export function appendChatMsg(className, textos) {
     }
 
     chatBox.appendChild(div);
+    _limitarMensagens(chatBox);
     chatBox.scrollTop = chatBox.scrollHeight;
-    // Sincroniza pro overlay mobile se estiver aberto
+    // Sincroniza pro overlay mobile se estiver aberto: só anexa a mensagem nova
+    // (antes copiava o innerHTML inteiro do chat a cada mensagem)
     const overlayBox = document.getElementById("chatOverlayBox");
     if (overlayBox && document.getElementById("chatOverlay")?.classList.contains("ativo")) {
-        overlayBox.innerHTML = chatBox.innerHTML;
+        overlayBox.appendChild(div.cloneNode(true));
+        _limitarMensagens(overlayBox);
         overlayBox.scrollTop = overlayBox.scrollHeight;
     }
+}
+
+// Mantém o chat com no máximo MAX_MSGS_CHAT mensagens (o DOM crescia sem
+// limite numa sessão longa, cada uma com imagens do Twemoji).
+const MAX_MSGS_CHAT = 150;
+function _limitarMensagens(box) {
+    while (box.childElementCount > MAX_MSGS_CHAT) box.firstElementChild.remove();
 }
 
 export function atualizarPreviewSkin() {

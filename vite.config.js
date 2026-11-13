@@ -16,6 +16,11 @@ export default defineConfig({
   root: ".",
   publicDir: "public",
   base: "/",
+  // ID do build, usado como cache-bust dos sprites/mapas (src/main.js).
+  // Muda a cada build/deploy, mas fica estável entre visitas.
+  define: {
+    __BUILD_ID__: JSON.stringify(Date.now().toString(36)),
+  },
   build: {
     outDir: "dist",
     emptyOutDir: true,

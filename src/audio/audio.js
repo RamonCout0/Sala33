@@ -9,19 +9,6 @@ let volumeGeral = 0.5;
 const audios = {};
 let audioTocando = null;
 
-export function precarregarAudios() {
-    // No mobile não faz preload — evita lag e throttling do browser
-    if ("ontouchstart" in window) return;
-    for (const id in AUDIO_PATHS) {
-        if (!audios[id]) {
-            audios[id] = new Audio(AUDIO_PATHS[id]);
-            audios[id].loop = true;
-            audios[id].volume = volumeGeral;
-            audios[id].preload = "auto";
-        }
-    }
-}
-
 // Retoma música quando o usuário volta à aba (mobile pausa áudio em background)
 document.addEventListener("visibilitychange", () => {
     if (!document.hidden && audioTocando) {

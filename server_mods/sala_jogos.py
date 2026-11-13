@@ -17,6 +17,13 @@ STATE = {
     "ativo": False,
 }
 
+# Contador de ticks pra controlar a frequência de envio. A física roda a 60/s,
+# mas só transmitimos 30/s com partida rolando e 4/s parado. Antes mandava 60/s
+# sempre, o que enchia a fila de saída dos jogadores e atrasava o 'movimento'.
+_tick_n = 0
+ENVIO_ATIVO_A_CADA = 2     # 30 msgs/s
+ENVIO_PARADO_A_CADA = 15   # 4 msgs/s
+
 
 def _reset_bola():
     STATE["bola_x"] = 100
@@ -47,6 +54,8 @@ def on_leave(websocket, JOGADORES):
 
 
 async def tick(JOGADORES, SALAS, enviar_para_sala):
+    global _tick_n
+    _tick_n += 1
     if STATE["ativo"]:
         STATE["bola_x"] += STATE["bola_dx"]
         STATE["bola_y"] += STATE["bola_dy"]
@@ -70,6 +79,13 @@ async def tick(JOGADORES, SALAS, enviar_para_sala):
                 STATE["p1_score"] += 1
                 _reset_bola()
 
+    a_cada = ENVIO_ATIVO_A_CADA if STATE["ativo"] else ENVIO_PARADO_A_CADA
+    if _tick_n % a_cada:
+        return
+    destinos = SALAS.get(SALA, set())
+    if not destinos:
+        return
+
     payload = {
         "tipo": "atualizacao_pong",
         "estado": {
@@ -81,7 +97,7 @@ async def tick(JOGADORES, SALAS, enviar_para_sala):
             "p2_score": STATE["p2_score"],
         },
     }
-    for ws in list(SALAS.get(SALA, set())):
+    for ws in list(destinos):
         if ws in JOGADORES:
             payload["voce_esta_jogando"] = (ws == STATE["p1_ws"] or ws == STATE["p2_ws"])
             try:
@@ -108,7 +124,7 @@ async def handle(tipo, websocket, dados, JOGADORES, SALAS, enviar_para_sala):
 
         if voce_sentou:
             await enviar_para_sala(SALA, {
-                "tipo": "movimento", "id": id(websocket),
+                "tipo": "movimento", "id": JOGADORES[websocket]["sid"],
                 "x": JOGADORES[websocket]["x"], "y": JOGADORES[websocket]["y"],
                 "lado": JOGADORES[websocket]["lado"],
             })

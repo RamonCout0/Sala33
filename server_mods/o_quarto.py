@@ -15,6 +15,11 @@ STATE = {
     "last_spam": {},   # ws -> timestamp — rate limit por jogador
 }
 
+# A aura decai a 60 ticks/s, mas o estado só é transmitido a cada 2 ticks
+# (30/s) pra não encher a fila de saída dos jogadores.
+_tick_n = 0
+ENVIO_A_CADA = 2
+
 SPAM_COOLDOWN = 0.05  # mínimo 50ms entre spams (~20/s máximo)
 
 
@@ -47,6 +52,11 @@ async def tick(JOGADORES, SALAS, enviar_para_sala):
 
     STATE["p1_poder"] = max(0, STATE["p1_poder"] - 0.1)
     STATE["p2_poder"] = max(0, STATE["p2_poder"] - 0.1)
+
+    global _tick_n
+    _tick_n += 1
+    if _tick_n % ENVIO_A_CADA:
+        return
 
     p1_sprite = JOGADORES[STATE["p1_ws"]]["spriteId"] if STATE["p1_ws"] in JOGADORES else "cinzaguy"
     p2_sprite = JOGADORES[STATE["p2_ws"]]["spriteId"] if STATE["p2_ws"] in JOGADORES else "cinzaguy"
@@ -95,7 +105,7 @@ async def handle(tipo, websocket, dados, JOGADORES, SALAS, enviar_para_sala):
 
         if voce_sentou:
             await enviar_para_sala(SALA, {
-                "tipo": "movimento", "id": id(websocket),
+                "tipo": "movimento", "id": JOGADORES[websocket]["sid"],
                 "x": JOGADORES[websocket]["x"], "y": JOGADORES[websocket]["y"],
                 "lado": JOGADORES[websocket]["lado"],
             })

@@ -11,25 +11,41 @@ SALA33_REGISTRAR("televisao", {
     onTeclaDown() { return false; },
     onFisica() { return { bloqueiaMovimento: false, tremor: 0 }; },
 
+    // Quadros de ruído pré-gerados (uma vez) e alternados a cada frame.
+    // Antes criava um canvas + ImageData novos e sorteava 240 mil números
+    // por frame, o que gerava travadas de garbage collector.
+    _quadrosRuido: null,
+    _quadroAtual: 0,
+    _N_QUADROS: 6,
+
+    _gerarRuido(w, h) {
+        this._quadrosRuido = [];
+        for (let q = 0; q < this._N_QUADROS; q++) {
+            const c = document.createElement("canvas");
+            c.width = w; c.height = h;
+            const octx = c.getContext("2d");
+            const imageData = octx.createImageData(w, h);
+            const data = imageData.data;
+            for (let i = 0; i < data.length; i += 4) {
+                const v = Math.random() * 255;
+                data[i]     = v;
+                data[i + 1] = v;
+                data[i + 2] = v;
+                data[i + 3] = Math.random() * 60;
+            }
+            octx.putImageData(imageData, 0, 0);
+            this._quadrosRuido.push(c);
+        }
+    },
+
     render(ctx, meuBicho, outrosJogadores, imagensSprites, tamSprite) {
         const w = ctx.canvas.width;
         const h = ctx.canvas.height;
 
-        // Granulado num canvas auxiliar para não sobrescrever os jogadores
-        const offscreen = document.createElement("canvas");
-        offscreen.width = w; offscreen.height = h;
-        const octx = offscreen.getContext("2d");
-        const imageData = octx.createImageData(w, h);
-        const data = imageData.data;
-        for (let i = 0; i < data.length; i += 4) {
-            const v = Math.random() * 255;
-            data[i]     = v;
-            data[i + 1] = v;
-            data[i + 2] = v;
-            data[i + 3] = Math.random() * 60;
-        }
-        octx.putImageData(imageData, 0, 0);
-        ctx.drawImage(offscreen, 0, 0);
+        const q0 = this._quadrosRuido?.[0];
+        if (!q0 || q0.width !== w || q0.height !== h) this._gerarRuido(w, h);
+        this._quadroAtual = (this._quadroAtual + 1) % this._N_QUADROS;
+        ctx.drawImage(this._quadrosRuido[this._quadroAtual], 0, 0);
 
         // Linhas de varredura horizontais (efeito CRT)
         ctx.save();
