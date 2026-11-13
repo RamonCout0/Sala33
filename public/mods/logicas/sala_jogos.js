@@ -57,11 +57,29 @@ SALA33_REGISTRAR("sala_jogos", {
         return false;
     },
 
+    // Direção atual da raquete (-1 sobe, 0 parada, 1 desce). Só manda pro
+    // servidor quando muda — antes mandava um comando por frame (60/s), acima
+    // do limite de 30 msgs/s do servidor, e metade era descartada.
+    _dir: 0,
+    _saindo: false,
+
     onFisica(meuBicho, ws, teclas) {
-        if (!this._jogando) return { bloqueiaMovimento: false, tremor: 0 };
-        if (teclas["ArrowUp"] || teclas["KeyW"]) ws.send(JSON.stringify({ tipo: "comando_pong", acao: "subir" }));
-        if (teclas["ArrowDown"] || teclas["KeyS"]) ws.send(JSON.stringify({ tipo: "comando_pong", acao: "descer" }));
-        if (teclas["KeyQ"]) ws.send(JSON.stringify({ tipo: "sair_pong" }));
+        if (!this._jogando) {
+            this._dir = 0;
+            this._saindo = false;
+            return { bloqueiaMovimento: false, tremor: 0 };
+        }
+        const sobe = teclas["ArrowUp"] || teclas["KeyW"];
+        const desce = teclas["ArrowDown"] || teclas["KeyS"];
+        const dir = sobe && !desce ? -1 : desce && !sobe ? 1 : 0;
+        if (dir !== this._dir) {
+            this._dir = dir;
+            ws.send(JSON.stringify({ tipo: "comando_pong", acao: "dir", valor: dir }));
+        }
+        if (teclas["KeyQ"] && !this._saindo) {
+            this._saindo = true;
+            ws.send(JSON.stringify({ tipo: "sair_pong" }));
+        }
         return { bloqueiaMovimento: true, tremor: 0 };
     },
 

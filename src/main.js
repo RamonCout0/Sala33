@@ -285,32 +285,105 @@ function conectar(opts = {}) {
     document.getElementById("menu").style.display = "none";
     document.getElementById("gameUI").style.display = "flex";
 
+    tokenSessao = token;
+    minhaSala = SALA_INICIAL;
+    outrosJogadores = {};
     musicaDaSala(SALA_INICIAL);
+    saidaIntencional = false;
+    reconectando = false;
+    tentativasReconexao = 0;
+    abrirSocket();
+}
+window.conectar = conectar;
 
+// ----- Reconexão automática -----
+// Se a conexão cair (internet oscilou, servidor reiniciou), tenta voltar
+// sozinho com espera crescente (1s, 2s, 4s… até 8s) e devolve o jogador à
+// mesma sala e posição. Só não reconecta quando a saída foi intencional
+// (erro de login, conta aberta em outro lugar).
+let tokenSessao = null;
+let saidaIntencional = false;
+let reconectando = false;
+let tentativasReconexao = 0;
+let timerReconexao = null;
+let jogoIniciado = false;   // loop e controles mobile só são ligados uma vez
+
+function avisoConexao(texto) {
+    let el = document.getElementById("avisoConexao");
+    if (!el) {
+        el = document.createElement("div");
+        el.id = "avisoConexao";
+        el.style.cssText = "position:fixed;top:12px;left:50%;transform:translateX(-50%);" +
+            "z-index:9999;background:#000;color:#fff;border:1px solid #fff;" +
+            "font:12px monospace;padding:6px 12px;letter-spacing:1px;display:none;";
+        document.body.appendChild(el);
+    }
+    el.textContent = texto || "";
+    el.style.display = texto ? "block" : "none";
+}
+
+function agendarReconexao() {
+    clearTimeout(timerReconexao);
+    const espera = Math.min(8000, 1000 * 2 ** tentativasReconexao);
+    tentativasReconexao++;
+    avisoConexao(`CONEXÃO PERDIDA — RECONECTANDO EM ${Math.round(espera / 1000)}s…`);
+    timerReconexao = setTimeout(() => {
+        avisoConexao("RECONECTANDO…");
+        abrirSocket();
+    }, espera);
+}
+
+function voltarAoMenu(mensagem) {
+    saidaIntencional = true;
+    clearTimeout(timerReconexao);
+    avisoConexao("");
+    if (mensagem) alert(mensagem);
+    try { ws?.close(); } catch {}
+    document.getElementById("menu").style.display = "block";
+    document.getElementById("gameUI").style.display = "none";
+}
+
+function abrirSocket() {
+    const token = tokenSessao;
     ws = new WebSocket(_wsUrl());
     setSocket(ws);   // registra o socket no módulo net pra os módulos de UI usarem enviar()
+    const esteWs = ws;
 
     ws.onopen = () => {
         const payloadLogin = token
             ? { tipo: "login", token, spriteId: meuBicho.spriteId, lado: meuBicho.lado }
             : { tipo: "login", username: meuBicho.username, spriteId: meuBicho.spriteId, lado: meuBicho.lado };
         ws.send(JSON.stringify(payloadLogin));
+        if (reconectando) return;   // já está no jogo: só refaz o login
         legendaTimer = 180;
         // Sem preload de todas as músicas (~80 MB): cada faixa é baixada sob
         // demanda em tocarMusica(), sem disputar banda com o WebSocket.
-        setupMobileControls();
         getLogica()?.onEnter?.(MAPAS[minhaSala]);
-        requestAnimationFrame(loop);
+        if (!jogoIniciado) {
+            jogoIniciado = true;
+            setupMobileControls();
+            requestAnimationFrame(loop);
+        }
+    };
+
+    ws.onclose = () => {
+        if (esteWs !== ws) return;          // socket antigo, já substituído
+        if (saidaIntencional) return;
+        reconectando = true;
+        agendarReconexao();
     };
 
     ws.onmessage = (event) => {
         const dados = JSON.parse(event.data);
 
         if (dados.tipo === "erro_login") {
-            alert(dados.mensagem);
-            ws.close();
-            document.getElementById("menu").style.display = "block";
-            document.getElementById("gameUI").style.display = "none";
+            // Reconectando e o servidor ainda acha que a sessão antiga está
+            // online ("já está online")? Tenta de novo daqui a pouco.
+            if (reconectando && /online/i.test(dados.mensagem || "")) {
+                ws.close();   // onclose agenda a próxima tentativa
+                return;
+            }
+            voltarAoMenu(dados.mensagem);
             return;
         }
 
@@ -353,6 +426,22 @@ function conectar(opts = {}) {
                 registrarDebug("info", `» Logado como conta (${meuBicho.username}).`);
                 renderizarSocial();
                 pedirEstadoSala();   // pega likes da sala inicial
+            }
+            if (reconectando) {
+                // Login refeito: o servidor nos pôs na sala inicial. Volta pra
+                // sala/posição onde estávamos; a lista certa chega em seguida.
+                reconectando = false;
+                tentativasReconexao = 0;
+                avisoConexao("");
+                outrosJogadores = {};
+                if (minhaSala !== SALA_INICIAL) {
+                    ws.send(JSON.stringify({
+                        tipo: "mudar_sala", nova_sala: minhaSala,
+                        x: meuBicho.x, y: meuBicho.y, lado: meuBicho.lado,
+                    }));
+                    return;
+                }
+                ws.send(JSON.stringify({ tipo: "mover", x: meuBicho.x, y: meuBicho.y, lado: meuBicho.lado }));
             }
             dados.jogadores.forEach(p => {
                 if (p.id !== meuSid) {
@@ -525,11 +614,19 @@ function conectar(opts = {}) {
         }
         else {
             // Repassa para a lógica da sala atual
-            getLogica()?.onMensagem?.(dados, ws, meuBicho, tocarMusica, minhaSala);
+            getLogica()?.onMensagem?.(dados, wsSeguro, meuBicho, tocarMusica, minhaSala);
         }
     };
 }
-window.conectar = conectar;
+
+// Wrapper do socket passado pros plugins de sala: durante uma reconexão o
+// `ws` fica em CONNECTING, e ws.send() lança erro nesse estado (travaria o
+// loop do jogo em salas cujo onFisica envia mensagens, como o Pong).
+const wsSeguro = {
+    send(msg) { if (ws?.readyState === WebSocket.OPEN) ws.send(msg); },
+    get readyState() { return ws?.readyState ?? WebSocket.CLOSED; },
+    close() { ws?.close(); },
+};
 
 // =====================================================
 //   INPUT
@@ -546,7 +643,7 @@ chatInput.addEventListener("blur", () => {
 });
 chatInput.addEventListener("keypress", (e) => {
     if (e.key === "Enter" && chatInput.value.trim()) {
-        ws.send(JSON.stringify({ tipo: "chat", texto: traduzirEmotes(chatInput.value) }));
+        wsSeguro.send(JSON.stringify({ tipo: "chat", texto: traduzirEmotes(chatInput.value) }));
         chatInput.value = "";
         chatInput.blur();
     }
@@ -618,7 +715,7 @@ window.addEventListener("keydown", (e) => {
     }
 
     if (ws?.readyState === WebSocket.OPEN) {
-        const consumido = getLogica()?.onTeclaDown?.(e.code, ws, meuBicho);
+        const consumido = getLogica()?.onTeclaDown?.(e.code, wsSeguro, meuBicho);
         if (consumido) e.preventDefault();
     }
 });
@@ -681,7 +778,7 @@ function setupMobileControls() {
     if (btnE) segurar(btnE, () => {
         if (ws?.readyState === WebSocket.OPEN) {
             teclas["KeyE"] = true;
-            getLogica()?.onTeclaDown?.("KeyE", ws, meuBicho);
+            getLogica()?.onTeclaDown?.("KeyE", wsSeguro, meuBicho);
             setTimeout(() => { teclas["KeyE"] = false; }, 150);
         }
     }, () => {});
@@ -695,7 +792,7 @@ function setupMobileControls() {
     if (overlayInput) {
         overlayInput.addEventListener("keypress", e => {
             if (e.key === "Enter" && overlayInput.value.trim()) {
-                ws.send(JSON.stringify({ tipo: "chat", texto: traduzirEmotes(overlayInput.value) }));
+                wsSeguro.send(JSON.stringify({ tipo: "chat", texto: traduzirEmotes(overlayInput.value) }));
                 overlayInput.value = "";
                 overlayInput.blur();
             }
@@ -724,7 +821,7 @@ function atualizarFisica() {
     if (estadoTransicao !== "idle") { processarTransicao(); return; }
 
     // Pergunta para a lógica da sala se ela quer bloquear o movimento
-    const fisicaResult = getLogica()?.onFisica?.(meuBicho, ws, teclas) || { bloqueiaMovimento: false, tremor: 0 };
+    const fisicaResult = getLogica()?.onFisica?.(meuBicho, wsSeguro, teclas) || { bloqueiaMovimento: false, tremor: 0 };
     tremorTela = fisicaResult.tremor || 0;
 
     if (!fisicaResult.bloqueiaMovimento) {

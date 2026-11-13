@@ -15,7 +15,11 @@ STATE = {
     "bola_dx": 0, "bola_dy": 0,
     "p1_score": 0, "p2_score": 0,
     "ativo": False,
+    # Direção em que cada jogador está segurando a raquete (-1 sobe, 0 parado,
+    # 1 desce). O cliente só manda quando muda; o servidor move a cada tick.
+    "p1_dir": 0, "p2_dir": 0,
 }
+VEL_RAQUETE = 3   # px por tick (60 ticks/s)
 
 # Contador de ticks pra controlar a frequência de envio. A física roda a 60/s,
 # mas só transmitimos 30/s com partida rolando e 4/s parado. Antes mandava 60/s
@@ -42,6 +46,8 @@ def _reset_total():
     STATE["bola_y"] = 75
     STATE["bola_dx"] = 0
     STATE["bola_dy"] = 0
+    STATE["p1_dir"] = 0
+    STATE["p2_dir"] = 0
 
 
 def on_leave(websocket, JOGADORES):
@@ -56,6 +62,9 @@ def on_leave(websocket, JOGADORES):
 async def tick(JOGADORES, SALAS, enviar_para_sala):
     global _tick_n
     _tick_n += 1
+    for lado in ("p1", "p2"):
+        if STATE[f"{lado}_ws"] and STATE[f"{lado}_dir"]:
+            STATE[f"{lado}_y"] = max(0, min(115, STATE[f"{lado}_y"] + STATE[f"{lado}_dir"] * VEL_RAQUETE))
     if STATE["ativo"]:
         STATE["bola_x"] += STATE["bola_dx"]
         STATE["bola_y"] += STATE["bola_dy"]
@@ -152,7 +161,17 @@ async def handle(tipo, websocket, dados, JOGADORES, SALAS, enviar_para_sala):
 
     elif tipo == "comando_pong":
         acao = dados.get("acao")
-        if websocket == STATE["p1_ws"]:
+        if acao == "dir":
+            # Novo protocolo: direção contínua até o próximo "dir"
+            valor = dados.get("valor")
+            if valor not in (-1, 0, 1):
+                return
+            if websocket == STATE["p1_ws"]:
+                STATE["p1_dir"] = valor
+            elif websocket == STATE["p2_ws"]:
+                STATE["p2_dir"] = valor
+        # Protocolo antigo (clientes em cache): um passo por comando
+        elif websocket == STATE["p1_ws"]:
             if acao == "subir":
                 STATE["p1_y"] = max(0, STATE["p1_y"] - 5)
             elif acao == "descer":
