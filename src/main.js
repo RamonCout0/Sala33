@@ -5,7 +5,13 @@
 // =====================================================
 import { Wasm } from "./core/wasm.js";
 import { MAPAS, PATHS_SPRITES, AUDIO_PATHS } from "./world/config.js";
-import { tocarMusica, ajustarVolume } from "./audio/audio.js";
+import { tocarMusica, ajustarVolume, preCarregarVizinhas } from "./audio/audio.js";
+
+// Toca a música da sala e já deixa baixando as das salas vizinhas (portas).
+function musicaDaSala(sala) {
+    tocarMusica(sala);
+    preCarregarVizinhas((MAPAS[sala]?.portas || []).map(p => p.destino));
+}
 import { initParticles, spawnFumaca, atualizarFumacas, desenharFumacas } from "./render/particles.js";
 import { inicializarPainelEmojis, appendChatMsg, atualizarPreviewSkin, traduzirEmotes, horaAtualBrasil, _aplicarGrayscaleEmojis } from "./ui/chat.js";
 import { setSocket, _wsUrl } from "./net/socket.js";
@@ -279,7 +285,7 @@ function conectar(opts = {}) {
     document.getElementById("menu").style.display = "none";
     document.getElementById("gameUI").style.display = "flex";
 
-    tocarMusica(SALA_INICIAL);
+    musicaDaSala(SALA_INICIAL);
 
     ws = new WebSocket(_wsUrl());
     setSocket(ws);   // registra o socket no módulo net pra os módulos de UI usarem enviar()
@@ -421,7 +427,7 @@ function conectar(opts = {}) {
                 }
             });
             legendaTimer = 180;
-            tocarMusica(minhaSala);
+            musicaDaSala(minhaSala);
             getLogica()?.onEnter?.(MAPAS[minhaSala]);
             animarTeleporte();      // flash + label "TELEPORTADO"
             spawnFumaca(meuBicho.x + meuBicho.tamanho / 2, meuBicho.y + meuBicho.tamanho / 2);
@@ -803,7 +809,7 @@ function processarTransicao() {
             teclas = {};
             tremorTela = 0;
 
-            tocarMusica(portaPendente.destino);
+            musicaDaSala(portaPendente.destino);
 
             if (ws?.readyState === WebSocket.OPEN) {
                 ws.send(JSON.stringify({

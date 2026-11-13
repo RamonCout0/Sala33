@@ -9,6 +9,34 @@ let volumeGeral = 0.5;
 const audios = {};
 let audioTocando = null;
 
+function _criarAudio(id) {
+    if (!audios[id]) {
+        audios[id] = new Audio(AUDIO_PATHS[id]);
+        audios[id].loop = true;
+        audios[id].volume = volumeGeral;
+        audios[id].preload = "auto";
+    }
+    return audios[id];
+}
+
+let _timerPrefetch = null;
+
+/**
+ * Pré-carrega em segundo plano as músicas das salas vizinhas (destinos das
+ * portas da sala atual), pra que já estejam prontas ao atravessar a porta.
+ * Espera um pouco antes de começar, pra música da sala atual ter prioridade
+ * de banda. Respeita o modo "economia de dados" do navegador.
+ */
+export function preCarregarVizinhas(ids) {
+    clearTimeout(_timerPrefetch);
+    if (navigator.connection?.saveData) return;
+    _timerPrefetch = setTimeout(() => {
+        for (const id of new Set(ids)) {
+            if (AUDIO_PATHS[id]) _criarAudio(id).load();
+        }
+    }, 2000);
+}
+
 // Retoma música quando o usuário volta à aba (mobile pausa áudio em background)
 document.addEventListener("visibilitychange", () => {
     if (!document.hidden && audioTocando) {
@@ -18,12 +46,7 @@ document.addEventListener("visibilitychange", () => {
 
 export function tocarMusica(id) {
     if (!AUDIO_PATHS[id]) return;
-    if (!audios[id]) {
-        audios[id] = new Audio(AUDIO_PATHS[id]);
-        audios[id].loop = true;
-        audios[id].volume = volumeGeral;
-        audios[id].preload = "auto";
-    }
+    _criarAudio(id);
     // Já está tocando essa faixa? não reinicia (evita corte ao reentrar na sala)
     if (audioTocando === audios[id] && !audios[id].paused) return;
     if (audioTocando && audioTocando !== audios[id]) {
